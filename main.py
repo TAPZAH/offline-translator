@@ -31,6 +31,7 @@ from language_packages import (
     architecture_label,
     get_installed_pairs,
     get_model_architecture,
+    needed_pairs_for_path,
     set_model_architecture,
 )
 from languages_window import LanguagesWindow
@@ -99,11 +100,11 @@ class TranslatorApp:
     def _setup_window(self) -> None:
         """Настраивает размер и заголовок окна."""
         self.window.title("Оффлайн Переводчик")
-        self.window.geometry("720x460")
-        self.window.minsize(720, 460)
+        self.window.geometry("720x520")
+        self.window.minsize(720, 520)
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(1, weight=1)
-        self.window.rowconfigure(3, weight=1)
+        self.window.rowconfigure(4, weight=1)
 
     def _apply_close_protocol(self) -> None:
         """Вешает на крестик Tcl-команду wm withdraw — без Python и без Win32."""
@@ -203,8 +204,19 @@ class TranslatorApp:
         )
         self.translate_button.grid(row=2, column=0, pady=5)
 
+        self.pivot_frame = tk.Frame(self.window)
+        self.pivot_label_var = tk.StringVar(value="Через английский:")
+        tk.Label(self.pivot_frame, textvariable=self.pivot_label_var, anchor=tk.W).pack(
+            fill=tk.X
+        )
+        self.pivot_text = tk.Text(
+            self.pivot_frame, wrap=tk.WORD, height=3, state=tk.DISABLED
+        )
+        self.pivot_text.pack(fill=tk.BOTH, expand=True)
+        self._bind_text_editing(self.pivot_text, allow_edit=False)
+
         self.output_text = tk.Text(self.window, wrap=tk.WORD, height=8, state=tk.DISABLED)
-        self.output_text.grid(row=3, column=0, sticky="nsew", padx=10, pady=(5, 5))
+        self.output_text.grid(row=4, column=0, sticky="nsew", padx=10, pady=(5, 5))
         self._bind_text_editing(self.output_text, allow_edit=False)
 
         self.status_var = tk.StringVar(value="Загрузка модели...")
@@ -215,7 +227,7 @@ class TranslatorApp:
             relief=tk.SUNKEN,
             padx=8,
         )
-        self.status_label.grid(row=4, column=0, sticky="ew")
+        self.status_label.grid(row=5, column=0, sticky="ew")
 
     def _set_status(self, message: str) -> None:
         """Обновляет текст строки статуса."""
@@ -227,6 +239,59 @@ class TranslatorApp:
         self.output_text.delete("1.0", tk.END)
         self.output_text.insert("1.0", text)
         self.output_text.config(state=tk.DISABLED)
+
+    def _set_pivot_text(self, text: str | None, pivot_code: str | None = None) -> None:
+        """Показывает или прячет промежуточный перевод через английский."""
+        try:
+            if not text or not pivot_code:
+                self.pivot_frame.grid_remove()
+                return
+            pivot_name = language_display_name(pivot_code, pivot_code)
+            self.pivot_label_var.set(f"Через {pivot_name.lower()}:")
+            self.pivot_text.config(state=tk.NORMAL)
+            self.pivot_text.delete("1.0", tk.END)
+            self.pivot_text.insert("1.0", text)
+            self.pivot_text.config(state=tk.DISABLED)
+            self.pivot_frame.grid(
+                row=3, column=0, sticky="nsew", padx=10, pady=(0, 5)
+            )
+        except Exception as error:
+            self._set_status(f"Ошибка промежуточного перевода: {error}")
+
+    def _route_status(self, source_code: str, target_code: str, prefix: str = "") -> str:
+        """Строка маршрута: прямой или двойной через английский."""
+        source_name = language_display_name(source_code, source_code)
+        target_name = language_display_name(target_code, target_code)
+        route = None
+        try:
+            if self.engine is not None:
+                route = self.engine.translation_route(source_code, target_code)
+        except Exception:
+            route = None
+        if route == "en":
+            english_name = language_display_name("en", "en")
+            path = f"{source_name} → {english_name} → {target_name}"
+        else:
+            path = f"{source_name} → {target_name}"
+        return f"{prefix}{path}" if prefix else path
+
+    def _missing_path_message(self, source_code: str, target_code: str) -> str:
+        """Подсказка, какие пакеты поставить для двойного перевода."""
+        source_name = language_display_name(source_code, source_code)
+        target_name = language_display_name(target_code, target_code)
+        needed = needed_pairs_for_path(source_code, target_code)
+        if not needed:
+            return (
+                f"Нет модели {source_name} → {target_name}. Откройте «Языки»."
+            )
+        legs = ", ".join(
+            f"{language_display_name(from_code)} → {language_display_name(to_code)}"
+            for from_code, to_code in needed
+        )
+        return (
+            f"Нет прямого {source_name} → {target_name}. "
+            f"Для двойного перевода установите: {legs}."
+        )
 
     def _bind_text_editing(self, widget: tk.Text, allow_edit: bool) -> None:
         """Вешает Ctrl+C/V/X/A по коду клавиши — работает и на русской раскладке."""
@@ -551,9 +616,7 @@ class TranslatorApp:
 
             self.is_translating = True
             self.translate_button.config(state=tk.DISABLED)
-            source_name = language_display_name(source_code, source_code)
-            target_name = language_display_name(target_code, target_code)
-            self._set_status(f"Перевожу {source_name} → {target_name}...")
+            self._set_status(self._route_status(source_code, target_code, "Перевожу "))
             worker = threading.Thread(
                 target=self._translate_text,
                 args=(source_text, source_code, target_code),
@@ -591,10 +654,7 @@ class TranslatorApp:
             return None
 
         if not self._has_translation_path(source_code, target_code):
-            self._set_status(
-                f"Нет модели {language_display_name(source_code)} → "
-                f"{language_display_name(target_code)}. Откройте «Языки»."
-            )
+            self._set_status(self._missing_path_message(source_code, target_code))
             return None
         return source_code, target_code
 
@@ -616,10 +676,7 @@ class TranslatorApp:
             self._installed_language_codes(),
         )
         if not self._has_translation_path(source_code, target_code):
-            raise RuntimeError(
-                f"Нет модели {language_display_name(source_code)} → "
-                f"{language_display_name(target_code)}. Откройте «Языки»."
-            )
+            raise RuntimeError(self._missing_path_message(source_code, target_code))
         translated_text = self.engine.translate(
             text,
             source_code,
@@ -637,18 +694,14 @@ class TranslatorApp:
     ) -> None:
         """Выполняет перевод в фоне и передаёт результат в интерфейс."""
         try:
-            translated_text = self.engine.translate(
+            result = self.engine.translate_result(
                 source_text,
                 source_code,
                 target_code,
             )
             self.root.after(
                 0,
-                lambda: self._on_translation_done(
-                    translated_text,
-                    source_code,
-                    target_code,
-                ),
+                lambda: self._on_translation_done(result, source_code, target_code),
             )
         except Exception as error:
             self.root.after(
@@ -658,20 +711,20 @@ class TranslatorApp:
 
     def _on_translation_done(
         self,
-        translated_text: str,
+        result,
         source_code: str,
         target_code: str,
     ) -> None:
-        """Показывает готовый перевод и восстанавливает кнопку."""
-        self._set_output_text(translated_text)
-        source_name = language_display_name(source_code, source_code)
-        target_name = language_display_name(target_code, target_code)
-        self._set_status(f"{source_name} → {target_name}")
+        """Показывает готовый перевод и промежуточный шаг, если он был."""
+        self._set_pivot_text(result.intermediate, result.pivot_code)
+        self._set_output_text(result.text)
+        self._set_status(self._route_status(source_code, target_code))
         self.is_translating = False
         self.translate_button.config(state=tk.NORMAL)
 
     def _on_translation_error(self, message: str) -> None:
         """Показывает ошибку перевода, не закрывая окно."""
+        self._set_pivot_text(None)
         self._set_status(f"Ошибка перевода: {message}")
         self.is_translating = False
         self.translate_button.config(state=tk.NORMAL)

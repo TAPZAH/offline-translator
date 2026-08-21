@@ -1,13 +1,25 @@
 import queue
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from language_packages import (
     get_installed_pairs,
     get_model_architecture,
     is_package_installed,
+    needed_pairs_for_path,
     resolve_model_path,
 )
+
+
+@dataclass
+class TranslationResult:
+    """Результат перевода: итоговый текст и необязательный промежуточный английский."""
+
+    text: str
+    intermediate: str | None = None
+    pivot_code: str | None = None
+
 
 
 class FirefoxEngine:
@@ -28,7 +40,29 @@ class FirefoxEngine:
 
     def translate(self, text: str, source_code: str, target_code: str) -> str:
         """Переводит текст, при необходимости через английский."""
+        return self.translate_result(text, source_code, target_code).text
+
+    def translate_result(
+        self, text: str, source_code: str, target_code: str
+    ) -> TranslationResult:
+        """Переводит текст и возвращает промежуточный шаг, если он был."""
         return self._call("translate", text, source_code, target_code)
+
+    def translation_route(self, source_code: str, target_code: str) -> str | None:
+        """Возвращает 'direct', 'en' или None, если пути нет."""
+        if source_code == target_code:
+            return None
+        if is_package_installed(source_code, target_code):
+            return "direct"
+        if (
+            source_code != "en"
+            and target_code != "en"
+            and is_package_installed(source_code, "en")
+            and is_package_installed("en", target_code)
+        ):
+            return "en"
+        return None
+
 
     def warmup(self, source_code: str, target_code: str) -> None:
         """Загружает модель заранее, чтобы первая кнопка не тормозила."""
@@ -89,15 +123,15 @@ class FirefoxEngine:
         text: str,
         source_code: str,
         target_code: str,
-    ) -> str:
-        """Выполняет прямой перевод или пивот через английский."""
+    ) -> TranslationResult:
+        """Выполняет прямой перевод или двойной через английский."""
         source_text = (text or "").strip()
         if not source_text:
-            return text
+            return TranslationResult(text=text)
 
         if is_package_installed(source_code, target_code):
             translator = self._load_translator(translators, source_code, target_code)
-            return self._run_translate(translator, source_text)
+            return TranslationResult(text=self._run_translate(translator, source_text))
 
         if (
             source_code != "en"
@@ -108,11 +142,20 @@ class FirefoxEngine:
             to_english = self._load_translator(translators, source_code, "en")
             english_text = self._run_translate(to_english, source_text)
             from_english = self._load_translator(translators, "en", target_code)
-            return self._run_translate(from_english, english_text)
+            final_text = self._run_translate(from_english, english_text)
+            return TranslationResult(
+                text=final_text,
+                intermediate=english_text,
+                pivot_code="en",
+            )
 
-        raise RuntimeError(
-            f"Нет модели {source_code} → {target_code}"
-        )
+        missing = needed_pairs_for_path(source_code, target_code)
+        if missing:
+            legs = ", ".join(f"{src}->{trg}" for src, trg in missing)
+            raise RuntimeError(
+                f"Нет модели {source_code} → {target_code}. Установите: {legs}"
+            )
+        raise RuntimeError(f"Нет модели {source_code} → {target_code}")
 
     def _ensure_path(
         self,

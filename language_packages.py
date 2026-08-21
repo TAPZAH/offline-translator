@@ -224,6 +224,22 @@ def is_package_installed(
         return False
 
 
+def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]:
+    """Какие пакеты нужны для прямого или двойного перевода через английский."""
+    if from_code == to_code:
+        return []
+    if is_package_installed(from_code, to_code):
+        return []
+    if from_code == "en" or to_code == "en":
+        return [(from_code, to_code)]
+    needed: list[tuple[str, str]] = []
+    if not is_package_installed(from_code, "en"):
+        needed.append((from_code, "en"))
+    if not is_package_installed("en", to_code):
+        needed.append(("en", to_code))
+    return needed
+
+
 def get_installed_architectures(from_code: str, to_code: str) -> list[str]:
     """Какие размеры модели стоят для этой пары."""
     found: list[str] = []
@@ -341,6 +357,13 @@ def download_and_install(language_package, progress_callback=None) -> None:
         _remove_tree(staging)
     staging.mkdir(parents=True, exist_ok=True)
 
+    planned_names = {
+        _normalized_name(file_name)
+        for file_name in file_names
+        if _normalized_name(file_name)
+    }
+    has_split_vocab = "srcvocab.spm" in planned_names and "trgvocab.spm" in planned_names
+
     downloaded_total = 0
     for file_name in file_names:
         if file_name == "metadata.json":
@@ -364,10 +387,12 @@ def download_and_install(language_package, progress_callback=None) -> None:
             )
             downloaded_total += size
         except Exception as error:
-            # Короткий список (lex) ускоряет перевод, но без него модель работает
-            if target_name == "lex.bin":
+            # lex ускоряет перевод; общий vocab не нужен, если есть раздельные словари
+            if target_name == "lex.bin" or (
+                target_name == "vocab.spm" and has_split_vocab
+            ):
                 if progress_callback:
-                    progress_callback(0, 1, f"Пропускаю lex: {error}")
+                    progress_callback(0, 1, f"Пропускаю {target_name}: {error}")
                 continue
             raise
 
@@ -527,7 +552,17 @@ def _fetch_github_pairs(architecture: str) -> list[LanguagePackage]:
 def _list_remote_files(
     dirname: str, from_code: str, to_code: str, architecture: str
 ) -> list[str]:
-    """Список файлов пары: GitHub API, иначе стандартные имена модели."""
+    """Список файлов пары: CDN Firefox, GitHub API, иначе стандартные имена."""
+    names: list[str] = []
+    seen: set[str] = set()
+
+    def add_name(name: str) -> None:
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    for name in _cdn_file_names(from_code, to_code, architecture):
+        add_name(name)
     try:
         response = requests.get(
             f"{GITHUB_CONTENTS.format(architecture=architecture)}/{dirname}",
@@ -536,21 +571,22 @@ def _list_remote_files(
         )
         response.raise_for_status()
         entries = response.json()
-        names = []
         for entry in entries:
             if entry.get("type") != "file":
                 continue
-            name = entry.get("name") or ""
-            if name:
-                names.append(name)
-        if names:
-            return names
+            add_name(entry.get("name") or "")
     except Exception:
         pass
+    if names:
+        if "metadata.json" not in seen:
+            names.append("metadata.json")
+        return names
     pair = f"{from_code}{to_code}"
     return [
         f"model.{pair}.intgemm.alphas.bin.gz",
         f"vocab.{pair}.spm.gz",
+        f"srcvocab.{pair}.spm.gz",
+        f"trgvocab.{pair}.spm.gz",
         f"lex.50.50.{pair}.s2t.bin.gz",
         "metadata.json",
     ]
@@ -641,6 +677,23 @@ def _normalize_lang(code: str) -> str:
     return normalized.split("-", 1)[0]
 
 
+def _architectures_to_try(architecture: str) -> list[str]:
+    """Для base дополнительно берём base-memory с CDN Firefox."""
+    if architecture == "base":
+        return ["base", "base-memory"]
+    return [architecture]
+
+
+def _script_rank(code: str) -> int:
+    """Упрощённый китайский (zh-Hans) предпочтительнее традиционного."""
+    lowered = (code or "").lower().replace("_", "-")
+    if lowered in {"zh-hans", "zh-cn"}:
+        return 0
+    if lowered.startswith("zh"):
+        return 1
+    return 0
+
+
 def _cdn_candidates(
     from_code: str, to_code: str, stem: str, architecture: str
 ) -> list[tuple[str, str, str | None]]:
@@ -662,6 +715,13 @@ def _cdn_candidates(
         if not location or name != stem:
             continue
         matches.append(record)
+    matches.sort(
+        key=lambda record: (
+            0 if record.get("architecture") == architecture else 1,
+            _script_rank(record.get("targetLanguage") or ""),
+            _script_rank(record.get("sourceLanguage") or ""),
+        )
+    )
     urls = []
     for record in matches:
         urls.append(
@@ -672,6 +732,40 @@ def _cdn_candidates(
             )
         )
     return urls
+
+
+def _cdn_file_names(from_code: str, to_code: str, architecture: str) -> list[str]:
+    """Имена файлов пары из каталога Firefox Remote Settings."""
+    names: list[str] = []
+    seen: set[str] = set()
+    records = []
+    for architecture_name in _architectures_to_try(architecture):
+        for record in _firefox_records():
+            if _normalize_lang(record.get("sourceLanguage") or "") != _normalize_lang(
+                from_code
+            ):
+                continue
+            if _normalize_lang(record.get("targetLanguage") or "") != _normalize_lang(
+                to_code
+            ):
+                continue
+            if (record.get("architecture") or "") != architecture_name:
+                continue
+            records.append(record)
+    records.sort(
+        key=lambda record: (
+            0 if record.get("architecture") == architecture else 1,
+            _script_rank(record.get("targetLanguage") or ""),
+            _script_rank(record.get("sourceLanguage") or ""),
+        )
+    )
+    for record in records:
+        name = record.get("name") or ""
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
 
 
 def _download_model_file(
@@ -685,15 +779,19 @@ def _download_model_file(
 ) -> int:
     """Скачивает файл модели: GCS, затем CDN Firefox, затем GitHub LFS."""
     stem = remote_name[:-3] if remote_name.endswith(".gz") else remote_name
-    gcs_root = GCS_MODELS.format(architecture=architecture)
     github_lfs = GITHUB_LFS.format(architecture=architecture)
     github_raw = GITHUB_RAW.format(architecture=architecture)
-    urls: list[tuple[str, str, str | None]] = [
-        (f"{gcs_root}/{from_code}-{to_code}/{stem}.zst", "zst", None),
-        *_cdn_candidates(from_code, to_code, stem, architecture),
-        (f"{github_lfs}/{dirname}/{remote_name}", "gz", None),
-        (f"{github_raw}/{dirname}/{remote_name}", "gz", None),
-    ]
+    urls: list[tuple[str, str, str | None]] = []
+    for chosen in _architectures_to_try(architecture):
+        gcs_root = GCS_MODELS.format(architecture=chosen)
+        urls.append((f"{gcs_root}/{from_code}-{to_code}/{stem}.zst", "zst", None))
+        urls.extend(_cdn_candidates(from_code, to_code, stem, chosen))
+    urls.extend(
+        [
+            (f"{github_lfs}/{dirname}/{remote_name}", "gz", None),
+            (f"{github_raw}/{dirname}/{remote_name}", "gz", None),
+        ]
+    )
     last_error: Exception | None = None
     for url, encoding, expected_hash in urls:
         try:

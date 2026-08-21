@@ -34,10 +34,10 @@ def get_launcher_path() -> str:
 def get_autostart_command() -> str:
     """Собирает команду автозапуска для исходников или портативного exe."""
     if portable_env.is_frozen():
-        return f'"{get_main_script_path()}"'
+        return f'"{get_main_script_path()}" --minimized'
     launcher = get_launcher_path()
     script = get_main_script_path()
-    return f'"{launcher}" -3.13 "{script}"'
+    return f'"{launcher}" -3.13 "{script}" --minimized'
 
 
 def get_autostart_value() -> str | None:

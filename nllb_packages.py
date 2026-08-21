@@ -87,6 +87,10 @@ CT2_CONFIG = {
 }
 
 
+_model_installed_cache: bool | None = None
+_installed_pairs_cache: list[tuple[str, str, str, str]] | None = None
+
+
 def models_dir() -> Path:
     """Папка установленной модели NLLB."""
     env_dir = os.environ.get("OFFLINE_TRANSLATOR_NLLB")
@@ -105,15 +109,27 @@ def model_path() -> Path:
     return models_dir() / MODEL_ID
 
 
+def invalidate_cache() -> None:
+    """Сбрасывает кэш установленной модели NLLB."""
+    global _model_installed_cache, _installed_pairs_cache
+    _model_installed_cache = None
+    _installed_pairs_cache = None
+
+
 def is_model_installed() -> bool:
     """Проверяет, что файлы NLLB на месте."""
+    global _model_installed_cache
+    if _model_installed_cache is not None:
+        return _model_installed_cache
     root = model_path()
-    return (
+    installed = (
         (root / "model.bin").is_file()
         and (root / "shared_vocabulary.json").is_file()
         and (root / "sentencepiece.bpe.model").is_file()
         and (root / "config.json").is_file()
     )
+    _model_installed_cache = installed
+    return installed
 
 
 def to_nllb_code(iso_code: str) -> str:
@@ -131,8 +147,12 @@ def supported_codes() -> list[str]:
 
 def get_installed_pairs() -> list[tuple[str, str, str, str]]:
     """Если модель стоит — все поддерживаемые языки доступны сразу."""
+    global _installed_pairs_cache
+    if _installed_pairs_cache is not None:
+        return _installed_pairs_cache
     if not is_model_installed():
-        return []
+        _installed_pairs_cache = []
+        return _installed_pairs_cache
     pairs: list[tuple[str, str, str, str]] = []
     for code in supported_codes():
         other = "en" if code != "en" else "ru"
@@ -144,6 +164,7 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
                 language_display_name(other, other),
             )
         )
+    _installed_pairs_cache = pairs
     return pairs
 
 
@@ -229,6 +250,7 @@ def download_and_install(language_package, progress_callback=None) -> None:
     if downloads.is_dir() and not any(downloads.iterdir()):
         shutil.rmtree(downloads, ignore_errors=True)
 
+    invalidate_cache()
     if not is_model_installed():
         raise RuntimeError("Модель NLLB скачана, но файлы не найдены")
 

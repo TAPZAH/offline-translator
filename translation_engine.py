@@ -18,25 +18,18 @@ def get_engine():
 
 
 def invalidate_engines() -> None:
-    """Сбрасывает кэш уже созданных движков."""
+    """Сбрасывает кэш уже созданных движков и списков пакетов."""
+    for module_name in ("firefox_engine", "argos_engine", "nllb_engine"):
+        try:
+            module = __import__(module_name)
+            engine = getattr(module, "_engine", None)
+            if engine is not None:
+                engine.invalidate()
+        except Exception:
+            pass
     try:
-        import firefox_engine
+        from packages import invalidate_caches
 
-        if firefox_engine._engine is not None:
-            firefox_engine._engine.invalidate()
-    except Exception:
-        pass
-    try:
-        import argos_engine
-
-        if argos_engine._engine is not None:
-            argos_engine._engine.invalidate()
-    except Exception:
-        pass
-    try:
-        import nllb_engine
-
-        if nllb_engine._engine is not None:
-            nllb_engine._engine.invalidate()
+        invalidate_caches()
     except Exception:
         pass

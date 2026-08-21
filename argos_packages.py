@@ -1,9 +1,23 @@
 from language_detect import language_display_name
 from language_packages import LanguagePackage
+from translation_route import needed_english_pivot_pairs
+
+_installed_pairs_cache: list[tuple[str, str, str, str]] | None = None
+_installed_pair_set: set[tuple[str, str]] | None = None
+
+
+def invalidate_cache() -> None:
+    """Сбрасывает кэш установленных пар Argos."""
+    global _installed_pairs_cache, _installed_pair_set
+    _installed_pairs_cache = None
+    _installed_pair_set = None
 
 
 def get_installed_pairs() -> list[tuple[str, str, str, str]]:
     """Возвращает установленные пары Argos Translate."""
+    global _installed_pairs_cache, _installed_pair_set
+    if _installed_pairs_cache is not None:
+        return _installed_pairs_cache
     pairs: list[tuple[str, str, str, str]] = []
     try:
         from argostranslate import package
@@ -24,8 +38,13 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
                 )
             )
     except Exception:
-        return []
-    return sorted(pairs, key=lambda item: (item[0], item[1]))
+        _installed_pairs_cache = []
+        _installed_pair_set = set()
+        return _installed_pairs_cache
+    pairs.sort(key=lambda item: (item[0], item[1]))
+    _installed_pairs_cache = pairs
+    _installed_pair_set = {(from_code, to_code) for from_code, to_code, *_ in pairs}
+    return pairs
 
 
 def is_package_installed(
@@ -33,12 +52,16 @@ def is_package_installed(
 ) -> bool:
     """Проверяет, установлен ли пакет Argos."""
     try:
-        for installed_from, installed_to, *_rest in get_installed_pairs():
-            if installed_from == from_code and installed_to == to_code:
-                return True
+        if _installed_pair_set is None:
+            get_installed_pairs()
+        return (from_code, to_code) in (_installed_pair_set or ())
     except Exception:
         return False
-    return False
+
+
+def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]:
+    """Какие пакеты Argos нужны для прямого или двойного перевода."""
+    return needed_english_pivot_pairs(from_code, to_code, is_package_installed)
 
 
 def get_installed_architectures(from_code: str, to_code: str) -> list[str]:
@@ -130,5 +153,6 @@ def download_and_install(language_package, progress_callback=None) -> None:
         get_installed_languages.cache_clear()
     except Exception:
         pass
+    invalidate_cache()
     if not is_package_installed(from_code, to_code):
         raise RuntimeError("Пакет Argos скачан, но не найден среди установленных")

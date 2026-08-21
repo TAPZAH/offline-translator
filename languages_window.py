@@ -214,7 +214,7 @@ class LanguagesWindow:
             )
         else:
             self.status_var.set(
-                f"Доступно пакетов Argos: {len(self.available_packages)}"
+                f"Доступно пакетов: {len(self.available_packages)}"
             )
 
     def _package_status(self, from_code: str, to_code: str) -> str:

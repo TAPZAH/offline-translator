@@ -1,5 +1,3 @@
-import queue
-import threading
 from pathlib import Path
 
 from language_packages import (
@@ -9,11 +7,12 @@ from language_packages import (
     needed_pairs_for_path,
     resolve_model_path,
 )
+from threaded_engine import ThreadedEngine
 from translation_result import TranslationResult
+from translation_route import english_pivot_route, translate_with_english_pivot
 
 
-
-class FirefoxEngine:
+class FirefoxEngine(ThreadedEngine):
     """Оффлайн-переводчик на моделях Firefox Translations.
 
     fxtranslate держит нативный указатель и привязан к потоку, в котором создан.
@@ -21,146 +20,41 @@ class FirefoxEngine:
     """
 
     def __init__(self) -> None:
-        self._requests: queue.Queue = queue.Queue()
-        self._thread = threading.Thread(
-            target=self._run_worker,
-            name="firefox-engine",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def translate(self, text: str, source_code: str, target_code: str) -> str:
-        """Переводит текст, при необходимости через английский."""
-        return self.translate_result(text, source_code, target_code).text
-
-    def translate_result(
-        self, text: str, source_code: str, target_code: str
-    ) -> TranslationResult:
-        """Переводит текст и возвращает промежуточный шаг, если он был."""
-        return self._call("translate", text, source_code, target_code)
+        super().__init__("firefox-engine")
 
     def translation_route(self, source_code: str, target_code: str) -> str | None:
         """Возвращает 'direct', 'en' или None, если пути нет."""
-        if source_code == target_code:
-            return None
-        if is_package_installed(source_code, target_code):
-            return "direct"
-        if (
-            source_code != "en"
-            and target_code != "en"
-            and is_package_installed(source_code, "en")
-            and is_package_installed("en", target_code)
-        ):
-            return "en"
-        return None
+        return english_pivot_route(is_package_installed, source_code, target_code)
 
+    def _create_state(self):
+        """Кэш Translator по размеру модели и паре языков."""
+        return {}
 
-    def warmup(self, source_code: str, target_code: str) -> None:
-        """Загружает модель заранее, чтобы первая кнопка не тормозила."""
-        self._call("warmup", source_code, target_code)
+    def _worker_invalidate(self, state) -> None:
+        """Сбрасывает загруженные Translator."""
+        state.clear()
 
-    def invalidate(self) -> None:
-        """Сбрасывает кэш моделей после установки новых пакетов."""
-        self._call("invalidate")
-
-    def has_translation_path(self, source_code: str, target_code: str) -> bool:
-        """Проверяет прямую модель или связку через английский."""
-        if source_code == target_code:
-            return False
-        if is_package_installed(source_code, target_code):
-            return True
-        if source_code != "en" and target_code != "en":
-            return is_package_installed(source_code, "en") and is_package_installed(
-                "en", target_code
-            )
-        return False
-
-    def _call(self, action: str, *args):
-        """Отправляет задачу в рабочий поток и ждёт ответ."""
-        reply: queue.Queue = queue.Queue()
-        self._requests.put((action, args, reply))
-        result = reply.get()
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    def _run_worker(self) -> None:
-        """Обрабатывает перевод в одном потоке."""
-        translators: dict[tuple[str, str, str], object] = {}
-        while True:
-            action, args, reply = self._requests.get()
-            try:
-                if action == "invalidate":
-                    translators.clear()
-                    reply.put(None)
-                elif action == "warmup":
-                    source_code, target_code = args
-                    self._ensure_path(translators, source_code, target_code)
-                    reply.put(None)
-                elif action == "translate":
-                    text, source_code, target_code = args
-                    translated = self._translate_on_thread(
-                        translators, text, source_code, target_code
-                    )
-                    reply.put(translated)
-                else:
-                    reply.put(RuntimeError(f"Неизвестное действие: {action}"))
-            except Exception as error:
-                reply.put(error)
-
-    def _translate_on_thread(
+    def _worker_translate(
         self,
-        translators: dict[tuple[str, str, str], object],
+        state,
         text: str,
         source_code: str,
         target_code: str,
     ) -> TranslationResult:
         """Выполняет прямой перевод или двойной через английский."""
-        source_text = (text or "").strip()
-        if not source_text:
-            return TranslationResult(text=text)
 
-        if is_package_installed(source_code, target_code):
-            translator = self._load_translator(translators, source_code, target_code)
-            return TranslationResult(text=self._run_translate(translator, source_text))
+        def translate_direct(source_text: str, from_code: str, to_code: str) -> str:
+            translator = self._load_translator(state, from_code, to_code)
+            return self._run_translate(translator, source_text)
 
-        if (
-            source_code != "en"
-            and target_code != "en"
-            and is_package_installed(source_code, "en")
-            and is_package_installed("en", target_code)
-        ):
-            to_english = self._load_translator(translators, source_code, "en")
-            english_text = self._run_translate(to_english, source_text)
-            from_english = self._load_translator(translators, "en", target_code)
-            final_text = self._run_translate(from_english, english_text)
-            return TranslationResult(
-                text=final_text,
-                intermediate=english_text,
-                pivot_code="en",
-            )
-
-        missing = needed_pairs_for_path(source_code, target_code)
-        if missing:
-            legs = ", ".join(f"{src}->{trg}" for src, trg in missing)
-            raise RuntimeError(
-                f"Нет модели {source_code} → {target_code}. Установите: {legs}"
-            )
-        raise RuntimeError(f"Нет модели {source_code} → {target_code}")
-
-    def _ensure_path(
-        self,
-        translators: dict[tuple[str, str, str], object],
-        source_code: str,
-        target_code: str,
-    ) -> None:
-        """Прогревает нужные Translator."""
-        if is_package_installed(source_code, target_code):
-            self._load_translator(translators, source_code, target_code)
-            return
-        if source_code != "en" and target_code != "en":
-            self._load_translator(translators, source_code, "en")
-            self._load_translator(translators, "en", target_code)
+        return translate_with_english_pivot(
+            text,
+            source_code,
+            target_code,
+            is_package_installed,
+            translate_direct,
+            needed_pairs_for_path,
+        )
 
     def _load_translator(
         self,

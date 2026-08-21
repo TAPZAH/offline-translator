@@ -1,6 +1,3 @@
-import queue
-import threading
-
 from nllb_packages import (
     is_model_installed,
     is_package_installed,
@@ -8,30 +5,15 @@ from nllb_packages import (
     needed_pairs_for_path,
     to_nllb_code,
 )
+from threaded_engine import ThreadedEngine
 from translation_result import TranslationResult
 
 
-class NllbEngine:
+class NllbEngine(ThreadedEngine):
     """Оффлайн-переводчик NLLB-200 Distilled 600M через CTranslate2."""
 
     def __init__(self) -> None:
-        self._requests: queue.Queue = queue.Queue()
-        self._thread = threading.Thread(
-            target=self._run_worker,
-            name="nllb-engine",
-            daemon=True,
-        )
-        self._thread.start()
-
-    def translate(self, text: str, source_code: str, target_code: str) -> str:
-        """Переводит текст напрямую между любыми языками модели."""
-        return self.translate_result(text, source_code, target_code).text
-
-    def translate_result(
-        self, text: str, source_code: str, target_code: str
-    ) -> TranslationResult:
-        """NLLB переводит напрямую, без промежуточного английского."""
-        return self._call("translate", text, source_code, target_code)
+        super().__init__("nllb-engine")
 
     def translation_route(self, source_code: str, target_code: str) -> str | None:
         """NLLB всегда идёт напрямую, если оба языка есть в модели."""
@@ -41,80 +23,24 @@ class NllbEngine:
             return "direct"
         return None
 
-    def warmup(self, source_code: str, target_code: str) -> None:
-        """Загружает модель заранее."""
-        self._call("warmup", source_code, target_code)
+    def _create_state(self):
+        """Translator и SentencePiece живут только в рабочем потоке."""
+        return {"translator": None, "sp": None}
 
-    def invalidate(self) -> None:
+    def _worker_invalidate(self, state) -> None:
         """Сбрасывает загруженную модель после переустановки."""
-        self._call("invalidate")
+        state["translator"] = None
+        state["sp"] = None
+        try:
+            from nllb_packages import invalidate_cache
 
-    def has_translation_path(self, source_code: str, target_code: str) -> bool:
-        """Проверяет, что модель стоит и оба языка ей известны."""
-        return self.translation_route(source_code, target_code) is not None
+            invalidate_cache()
+        except Exception:
+            pass
 
-    def _call(self, action: str, *args):
-        """Отправляет задачу в рабочий поток и ждёт ответ."""
-        reply: queue.Queue = queue.Queue()
-        self._requests.put((action, args, reply))
-        result = reply.get()
-        if isinstance(result, Exception):
-            raise result
-        return result
-
-    def _run_worker(self) -> None:
-        """Держит Translator в одном потоке."""
-        state: dict = {"translator": None, "sp": None}
-        while True:
-            action, args, reply = self._requests.get()
-            try:
-                if action == "invalidate":
-                    state["translator"] = None
-                    state["sp"] = None
-                    reply.put(None)
-                elif action == "warmup":
-                    source_code, target_code = args
-                    try:
-                        self._translate_on_thread(
-                            state, "Hello", source_code, target_code
-                        )
-                    except Exception:
-                        pass
-                    reply.put(None)
-                elif action == "translate":
-                    text, source_code, target_code = args
-                    reply.put(
-                        self._translate_on_thread(
-                            state, text, source_code, target_code
-                        )
-                    )
-                else:
-                    reply.put(RuntimeError(f"Неизвестное действие: {action}"))
-            except Exception as error:
-                reply.put(error)
-
-    def _ensure_loaded(self, state: dict) -> None:
-        """Загружает CTranslate2 и SentencePiece при первом вызове."""
-        if state["translator"] is not None and state["sp"] is not None:
-            return
-        if not is_model_installed():
-            raise RuntimeError("Модель NLLB не установлена. Откройте «Языки».")
-        import ctranslate2
-        import sentencepiece as spm
-
-        root = model_path()
-        state["translator"] = ctranslate2.Translator(
-            str(root),
-            device="cpu",
-            compute_type="int8",
-        )
-        processor = spm.SentencePieceProcessor()
-        processor.load(str(root / "sentencepiece.bpe.model"))
-        state["sp"] = processor
-
-    def _translate_on_thread(
+    def _worker_translate(
         self,
-        state: dict,
+        state,
         text: str,
         source_code: str,
         target_code: str,
@@ -150,6 +76,25 @@ class NllbEngine:
         if not translated:
             raise RuntimeError("Пустой ответ переводчика NLLB")
         return TranslationResult(text=translated)
+
+    def _ensure_loaded(self, state: dict) -> None:
+        """Загружает CTranslate2 и SentencePiece при первом вызове."""
+        if state["translator"] is not None and state["sp"] is not None:
+            return
+        if not is_model_installed():
+            raise RuntimeError("Модель NLLB не установлена. Откройте «Языки».")
+        import ctranslate2
+        import sentencepiece as spm
+
+        root = model_path()
+        state["translator"] = ctranslate2.Translator(
+            str(root),
+            device="cpu",
+            compute_type="int8",
+        )
+        processor = spm.SentencePieceProcessor()
+        processor.load(str(root / "sentencepiece.bpe.model"))
+        state["sp"] = processor
 
 
 _engine: NllbEngine | None = None

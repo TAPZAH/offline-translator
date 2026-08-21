@@ -1,5 +1,3 @@
-import re
-
 try:
     from langdetect import LangDetectException, detect
 
@@ -13,13 +11,8 @@ CODE_ALIASES = {
     "zh-tw": "zh",
 }
 
-CYRILLIC_RE = re.compile(r"[А-Яа-яЁёІіЇїЄєҐґ]")
-LATIN_RE = re.compile(r"[A-Za-zÀ-ÿ]")
-UKRAINIAN_RE = re.compile(r"[ІіЇїЄєҐґ]")
-CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-ARABIC_RE = re.compile(r"[\u0600-\u06ff]")
-HANGUL_RE = re.compile(r"[\uac00-\ud7af]")
-HIRAGANA_KATAKANA_RE = re.compile(r"[\u3040-\u30ff]")
+_EXTRA_CYRILLIC = frozenset("ЁёІіЇїЄєҐґ")
+_UKRAINIAN = frozenset("ІіЇїЄєҐґ")
 
 LANGUAGE_NAMES = {
     "auto": "Авто",
@@ -98,12 +91,34 @@ def detect_language_code(text: str) -> str | None:
         return None
 
     try:
-        cyrillic_count = len(CYRILLIC_RE.findall(sample))
-        latin_count = len(LATIN_RE.findall(sample))
-        cjk_count = len(CJK_RE.findall(sample))
-        arabic_count = len(ARABIC_RE.findall(sample))
-        hangul_count = len(HANGUL_RE.findall(sample))
-        japanese_count = len(HIRAGANA_KATAKANA_RE.findall(sample))
+        cyrillic_count = 0
+        latin_count = 0
+        cjk_count = 0
+        arabic_count = 0
+        hangul_count = 0
+        japanese_count = 0
+        has_ukrainian = False
+        for char in sample:
+            code = ord(char)
+            if 0xAC00 <= code <= 0xD7AF:
+                hangul_count += 1
+            elif 0x3040 <= code <= 0x30FF:
+                japanese_count += 1
+            elif 0x4E00 <= code <= 0x9FFF:
+                cjk_count += 1
+            elif 0x0600 <= code <= 0x06FF:
+                arabic_count += 1
+            elif "А" <= char <= "я" or char in _EXTRA_CYRILLIC:
+                cyrillic_count += 1
+                if char in _UKRAINIAN:
+                    has_ukrainian = True
+            elif (
+                "A" <= char <= "Z"
+                or "a" <= char <= "z"
+                or "À" <= char <= "ÿ"
+            ):
+                latin_count += 1
+
         letter_count = (
             cyrillic_count
             + latin_count
@@ -124,9 +139,7 @@ def detect_language_code(text: str) -> str | None:
         if arabic_count > letter_count * 0.3:
             return "ar"
         if cyrillic_count >= latin_count and cyrillic_count > 0:
-            if UKRAINIAN_RE.search(sample):
-                return "uk"
-            return "ru"
+            return "uk" if has_ukrainian else "ru"
 
         if HAS_LANGDETECT and len(sample) >= 8:
             try:

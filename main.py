@@ -22,6 +22,11 @@ import pystray
 import pystray._util.win32 as win32_util
 from PIL import Image
 
+try:
+    import pyperclip
+except Exception:
+    pyperclip = None
+
 from app_settings import engine_label, get_engine_name
 from autostart import is_autostart_enabled, set_autostart
 from language_detect import detect_language_code, language_display_name
@@ -57,7 +62,7 @@ def patch_pystray_win32() -> None:
 class TranslatorApp:
     """Главное окно оффлайн-переводчика."""
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, start_minimized: bool = False) -> None:
         # Скрытый корень держит приложение живым, когда окно спрятано в трей
         self.root = root
         self.root.withdraw()
@@ -90,6 +95,10 @@ class TranslatorApp:
             self._translate_selection,
             self._installed_language_codes,
         )
+        if not start_minimized:
+            self.window.deiconify()
+            self.window.lift()
+            self.window.focus_force()
 
     def _setup_window(self) -> None:
         """Настраивает размер и заголовок окна."""
@@ -348,12 +357,11 @@ class TranslatorApp:
             self.window.clipboard_append(text)
         except tk.TclError:
             pass
-        try:
-            import pyperclip
-
-            pyperclip.copy(text)
-        except Exception:
-            pass
+        if pyperclip is not None:
+            try:
+                pyperclip.copy(text)
+            except Exception:
+                pass
 
     def _paste_text(self, widget: tk.Text) -> str:
         """Вставляет текст из буфера обмена в поле ввода."""
@@ -361,12 +369,11 @@ class TranslatorApp:
         try:
             clipboard_text = self.window.clipboard_get()
         except tk.TclError:
-            try:
-                import pyperclip
-
-                clipboard_text = pyperclip.paste() or ""
-            except Exception:
-                clipboard_text = ""
+            if pyperclip is not None:
+                try:
+                    clipboard_text = pyperclip.paste() or ""
+                except Exception:
+                    clipboard_text = ""
         if not clipboard_text:
             self._set_status("Буфер обмена пуст")
             return "break"
@@ -501,11 +508,11 @@ class TranslatorApp:
 
     def _installed_language_codes(self) -> set[str]:
         """Коды языков из установленных пакетов."""
-        codes: set[str] = set()
-        for from_code, to_code, _from_name, _to_name in self.installed_pairs:
-            codes.add(from_code)
-            codes.add(to_code)
-        return codes
+        return {
+            code
+            for from_code, to_code, _from_name, _to_name in self.installed_pairs
+            for code in (from_code, to_code)
+        }
 
     def _pick_auto_target(self, source_code: str) -> str | None:
         """Выбирает язык назначения: русский, иначе английский, иначе любой другой."""
@@ -575,7 +582,6 @@ class TranslatorApp:
             )
             if has_en_ru:
                 self.engine.warmup("en", "ru")
-                self.engine.translate("Hello", "en", "ru")
 
             self.root.after(0, lambda: self._on_languages_loaded(pairs))
         except Exception as error:
@@ -911,7 +917,7 @@ def main() -> None:
         root = tk.Tk()
         root.withdraw()
         # Ссылка на приложение нужна, чтобы обработчики окна не уничтожил GC
-        app = TranslatorApp(root)
+        app = TranslatorApp(root, start_minimized="--minimized" in sys.argv[1:])
         root.mainloop()
         _ = app
     except tk.TclError as error:

@@ -23,6 +23,8 @@ hiddenimports = [
     "settings_window",
     "translation_engine",
     "translation_result",
+    "threaded_engine",
+    "translation_route",
     "fxtranslate",
     "fxtranslate._engine",
     "zstandard",

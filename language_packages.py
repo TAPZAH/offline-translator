@@ -8,6 +8,7 @@ from pathlib import Path
 import portable_env
 import requests
 from language_detect import language_display_name
+from translation_route import needed_english_pivot_pairs
 
 try:
     import zstandard as zstd
@@ -68,6 +69,9 @@ FALLBACK_DIRS = {
 }
 
 _records_cache = None
+_installed_pairs_cache: list[tuple[str, str, str, str]] | None = None
+_installed_pair_set: set[tuple[str, str]] | None = None
+_ready_cache: dict[str, bool] = {}
 
 
 @dataclass
@@ -183,6 +187,14 @@ def pair_from_dirname(name: str) -> tuple[str, str] | None:
     return None
 
 
+def invalidate_cache() -> None:
+    """Сбрасывает кэш установленных пар после установки пакета."""
+    global _installed_pairs_cache, _installed_pair_set
+    _installed_pairs_cache = None
+    _installed_pair_set = None
+    _ready_cache.clear()
+
+
 def is_package_installed(
     from_code: str, to_code: str, architecture: str | None = None
 ) -> bool:
@@ -194,25 +206,16 @@ def is_package_installed(
             if architecture == "tiny":
                 return _model_ready(models_dir() / f"{from_code}-{to_code}")
             return False
-        return resolve_model_path(from_code, to_code) is not None
+        if _installed_pair_set is None:
+            get_installed_pairs()
+        return (from_code, to_code) in (_installed_pair_set or ())
     except Exception:
         return False
 
 
 def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]:
     """Какие пакеты нужны для прямого или двойного перевода через английский."""
-    if from_code == to_code:
-        return []
-    if is_package_installed(from_code, to_code):
-        return []
-    if from_code == "en" or to_code == "en":
-        return [(from_code, to_code)]
-    needed: list[tuple[str, str]] = []
-    if not is_package_installed(from_code, "en"):
-        needed.append((from_code, "en"))
-    if not is_package_installed("en", to_code):
-        needed.append(("en", to_code))
-    return needed
+    return needed_english_pivot_pairs(from_code, to_code, is_package_installed)
 
 
 def get_installed_architectures(from_code: str, to_code: str) -> list[str]:
@@ -226,6 +229,9 @@ def get_installed_architectures(from_code: str, to_code: str) -> list[str]:
 
 def get_installed_pairs() -> list[tuple[str, str, str, str]]:
     """Возвращает установленные пары (from_code, to_code, from_name, to_name)."""
+    global _installed_pairs_cache, _installed_pair_set
+    if _installed_pairs_cache is not None:
+        return _installed_pairs_cache
     pairs: list[tuple[str, str, str, str]] = []
     seen: set[tuple[str, str]] = set()
     try:
@@ -246,8 +252,13 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
                 )
             )
     except Exception:
-        return []
-    return sorted(pairs, key=lambda item: (item[0], item[1]))
+        _installed_pairs_cache = []
+        _installed_pair_set = set()
+        return _installed_pairs_cache
+    pairs.sort(key=lambda item: (item[0], item[1]))
+    _installed_pairs_cache = pairs
+    _installed_pair_set = seen
+    return pairs
 
 
 def update_remote_index() -> None:
@@ -388,6 +399,7 @@ def download_and_install(language_package, progress_callback=None) -> None:
     if installed.exists():
         _remove_tree(installed)
     staging.replace(installed)
+    invalidate_cache()
 
     if not is_package_installed(from_code, to_code, architecture):
         raise RuntimeError("Пакет скачан, но не найден среди установленных")
@@ -416,13 +428,19 @@ def _installed_pair_dirs() -> list[Path]:
 
 def _model_ready(model_path: Path) -> bool:
     """Проверяет, что в папке есть модель и словарь."""
-    if not (model_path / "model.bin").is_file():
-        return False
-    if (model_path / "vocab.spm").is_file():
-        return True
-    return (model_path / "srcvocab.spm").is_file() and (
-        model_path / "trgvocab.spm"
-    ).is_file()
+    cache_key = str(model_path)
+    cached = _ready_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    ready = (model_path / "model.bin").is_file() and (
+        (model_path / "vocab.spm").is_file()
+        or (
+            (model_path / "srcvocab.spm").is_file()
+            and (model_path / "trgvocab.spm").is_file()
+        )
+    )
+    _ready_cache[cache_key] = ready
+    return ready
 
 
 def _codes_from_installed(model_path: Path) -> tuple[str, str]:

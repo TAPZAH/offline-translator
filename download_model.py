@@ -1,21 +1,19 @@
 import sys
 
-from language_packages import download_and_install, get_available_pairs, get_model_architecture, is_package_installed
+from app_settings import engine_label, get_engine_name
+from packages import download_and_install, get_available_pairs, is_package_installed, update_remote_index
 
 FROM_CODE = "en"
 TO_CODE = "ru"
 
 
 def find_available_package(from_code: str, to_code: str):
-    """Ищет пакет в каталоге Firefox Translations."""
+    """Ищет пакет в каталоге текущего движка."""
     try:
-        from language_packages import update_remote_index
-
         update_remote_index()
     except Exception:
         pass
-    architecture = get_model_architecture()
-    for language_package in get_available_pairs(architecture):
+    for language_package in get_available_pairs():
         if (
             language_package.from_code == from_code
             and language_package.to_code == to_code
@@ -32,7 +30,7 @@ def install_pair(from_code: str, to_code: str, label: str) -> None:
 
     language_package = find_available_package(from_code, to_code)
     if language_package is None:
-        print(f"Пакет {label} не найден в каталоге Firefox")
+        print(f"Пакет {label} не найден в каталоге {engine_label(get_engine_name())}")
         sys.exit(1)
 
     print(f"Найден пакет: {language_package.from_code} -> {language_package.to_code}")

@@ -16,6 +16,7 @@ ARCHIVE_PATH = ROOT / "offline-translator-portable.zip"
 FIREFOX_MODELS = (
     Path.home() / ".local" / "share" / "offline-translator" / "firefox-models"
 )
+ARGOS_PACKAGES = Path.home() / ".local" / "share" / "argos-translate" / "packages"
 
 
 def create_app_icon() -> None:
@@ -40,17 +41,22 @@ def run_pyinstaller() -> None:
 
 
 def copy_language_packages() -> None:
-    """Кладёт оффлайн-модели Firefox рядом с exe."""
+    """Кладёт оффлайн-модели Firefox и пакеты Argos рядом с exe."""
     if not FIREFOX_MODELS.is_dir():
-        raise RuntimeError(f"Нет языковых пакетов: {FIREFOX_MODELS}")
-    target = PORTABLE_DIR / "data" / "firefox-models"
-    if target.exists():
-        shutil.rmtree(target)
+        raise RuntimeError(f"Нет языковых пакетов Firefox: {FIREFOX_MODELS}")
+    firefox_target = PORTABLE_DIR / "data" / "firefox-models"
+    if firefox_target.exists():
+        shutil.rmtree(firefox_target)
     shutil.copytree(
         FIREFOX_MODELS,
-        target,
+        firefox_target,
         ignore=shutil.ignore_patterns("_downloads"),
     )
+    if ARGOS_PACKAGES.is_dir():
+        argos_target = PORTABLE_DIR / "data" / "argos-packages"
+        if argos_target.exists():
+            shutil.rmtree(argos_target)
+        shutil.copytree(ARGOS_PACKAGES, argos_target)
 
 
 def write_readme() -> None:
@@ -64,6 +70,7 @@ def write_readme() -> None:
         "\n"
         "Не удаляйте папки _internal и data — в них движок и языковые модели.\n"
         "Дополнительные языки можно скачать в окне «Языки...».\n"
+        "Движок (Firefox или Argos) переключается в «Настройки...».\n"
     )
     (PORTABLE_DIR / "Прочитайте.txt").write_text(text, encoding="utf-8")
 

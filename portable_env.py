@@ -22,7 +22,7 @@ def resource_dir() -> str:
 
 
 def apply() -> None:
-    """Для портативной сборки складывает модели Firefox рядом с exe."""
+    """Для портативной сборки складывает модели рядом с exe."""
     if not is_frozen():
         return
     data_home = os.path.join(app_dir(), "data")
@@ -31,6 +31,14 @@ def apply() -> None:
     os.environ.setdefault("XDG_CACHE_HOME", os.path.join(data_home, "cache"))
     os.environ.setdefault("XDG_CONFIG_HOME", os.path.join(data_home, "config"))
     os.environ.setdefault(
+        "OFFLINE_TRANSLATOR_HOME",
+        data_home,
+    )
+    os.environ.setdefault(
         "OFFLINE_TRANSLATOR_MODELS",
         os.path.join(data_home, "firefox-models"),
+    )
+    os.environ.setdefault(
+        "ARGOS_PACKAGES_DIR",
+        os.path.join(data_home, "argos-packages"),
     )

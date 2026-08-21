@@ -123,8 +123,8 @@ def test_result_closes_on_click() -> None:
 
 def test_real_translate() -> None:
     """Проверяет оффлайн-перевод выделенного текста."""
-    from firefox_engine import get_engine
-    from language_packages import get_installed_pairs, is_package_installed
+    from packages import get_installed_pairs, is_package_installed
+    from translation_engine import get_engine
 
     pairs = get_installed_pairs()
     codes = sorted({code for pair in pairs for code in pair[:2]})

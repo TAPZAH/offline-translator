@@ -2,18 +2,21 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
+from app_settings import ENGINE_FIREFOX, get_engine_name
 from language_detect import language_display_name
 from language_packages import (
     ARCHITECTURE_LABELS,
     architecture_from_label,
     architecture_label,
+    get_model_architecture,
+    set_model_architecture,
+)
+from packages import (
     download_and_install,
     get_available_pairs,
     get_installed_architectures,
     get_installed_pairs,
-    get_model_architecture,
     is_package_installed,
-    set_model_architecture,
     update_remote_index,
 )
 
@@ -38,20 +41,29 @@ class LanguagesWindow:
 
     def _create_widgets(self) -> None:
         """Создаёт список пакетов, поиск и кнопки."""
+        engine = get_engine_name()
+        if engine == ENGINE_FIREFOX:
+            hint_text = (
+                "Нет прямой пары — программа переведёт через английский. "
+                "Для китайского нужен размер base."
+            )
+        else:
+            hint_text = (
+                "Пакеты Argos Translate. Нет прямой пары — перевод пойдёт через английский."
+            )
         hint = tk.Label(
             self.window,
-            text="Нет прямой пары — программа переведёт через английский: например русский→английский→китайский. Для этого нужны пакеты ru→en и en→zh (китайский есть в модели base).",
+            text=hint_text,
             wraplength=540,
             justify=tk.LEFT,
         )
         hint.pack(fill=tk.X, padx=10, pady=(10, 4))
 
-        size_frame = tk.Frame(self.window)
-        size_frame.pack(fill=tk.X, padx=10, pady=4)
-        tk.Label(size_frame, text="Модель:").pack(side=tk.LEFT)
+        self.size_frame = tk.Frame(self.window)
+        tk.Label(self.size_frame, text="Модель:").pack(side=tk.LEFT)
         self.size_var = tk.StringVar(value=architecture_label(get_model_architecture()))
         self.size_combo = ttk.Combobox(
-            size_frame,
+            self.size_frame,
             textvariable=self.size_var,
             values=list(ARCHITECTURE_LABELS.values()),
             state="readonly",
@@ -59,6 +71,8 @@ class LanguagesWindow:
         )
         self.size_combo.pack(side=tk.LEFT, padx=(6, 0))
         self.size_combo.bind("<<ComboboxSelected>>", self._on_architecture_changed)
+        if engine == ENGINE_FIREFOX:
+            self.size_frame.pack(fill=tk.X, padx=10, pady=4)
 
         search_frame = tk.Frame(self.window)
         search_frame.pack(fill=tk.X, padx=10, pady=4)
@@ -108,8 +122,10 @@ class LanguagesWindow:
             fill=tk.X, padx=10, pady=(0, 8)
         )
 
-    def _selected_architecture(self) -> str:
-        """Размер модели из комбобокса окна языков."""
+    def _selected_architecture(self) -> str | None:
+        """Размер модели Firefox или None для Argos."""
+        if get_engine_name() != ENGINE_FIREFOX:
+            return None
         return architecture_from_label(self.size_var.get())
 
     def _on_architecture_changed(self, _event=None) -> None:
@@ -185,9 +201,13 @@ class LanguagesWindow:
             self.status_var.set(
                 f"Каталог недоступен ({error_message}). Показаны установленные пакеты."
             )
-        else:
+        elif architecture:
             self.status_var.set(
                 f"Модель {architecture}: доступно пакетов {len(self.available_packages)}"
+            )
+        else:
+            self.status_var.set(
+                f"Доступно пакетов Argos: {len(self.available_packages)}"
             )
 
     def _package_status(self, from_code: str, to_code: str) -> str:
@@ -195,6 +215,8 @@ class LanguagesWindow:
         architecture = self._selected_architecture()
         if is_package_installed(from_code, to_code, architecture):
             return "Установлен"
+        if architecture is None:
+            return "Не установлен"
         others = [
             item
             for item in get_installed_architectures(from_code, to_code)
@@ -288,7 +310,8 @@ class LanguagesWindow:
         from_code, to_code = pair_id.split("->", 1)
         architecture = self._selected_architecture()
         if is_package_installed(from_code, to_code, architecture):
-            self.status_var.set(f"Пакет {architecture} уже установлен")
+            label = architecture or "Argos"
+            self.status_var.set(f"Пакет {label} уже установлен")
             return
 
         language_package = next(
@@ -297,7 +320,10 @@ class LanguagesWindow:
                 for item in self.available_packages
                 if item.from_code == from_code
                 and item.to_code == to_code
-                and item.architecture == architecture
+                and (
+                    architecture is None
+                    or item.architecture == architecture
+                )
             ),
             None,
         )
@@ -376,9 +402,13 @@ class LanguagesWindow:
         to_name = language_display_name(
             language_package.to_code, language_package.to_name
         )
-        self.status_var.set(
-            f"Установлено: {from_name} → {to_name} ({language_package.architecture})"
-        )
+        arch_label = language_package.architecture
+        if arch_label == "argos":
+            self.status_var.set(f"Установлено: {from_name} → {to_name}")
+        else:
+            self.status_var.set(
+                f"Установлено: {from_name} → {to_name} ({arch_label})"
+            )
         self._fill_tree()
         try:
             self.on_packages_changed()

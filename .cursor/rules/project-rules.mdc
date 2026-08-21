@@ -19,6 +19,7 @@ alwaysApply: true
 ## Библиотеки проекта
 - pyperclip — работа с буфером обмена
 - fxtranslate — оффлайн-перевод моделями Firefox Translations
+- argostranslate — оффлайн-перевод моделями Argos Translate
 - zstandard — распаковка моделей Mozilla
 - keyboard — глобальные горячие клавиши
 

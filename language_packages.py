@@ -68,7 +68,6 @@ FALLBACK_DIRS = {
 }
 
 _records_cache = None
-_architecture_cache = None
 
 
 @dataclass
@@ -81,6 +80,7 @@ class LanguagePackage:
     to_name: str
     dirname: str
     architecture: str = DEFAULT_ARCHITECTURE
+    argos_package: object | None = None
 
 
 def models_dir() -> Path:
@@ -121,41 +121,16 @@ def settings_path() -> Path:
 
 def get_model_architecture() -> str:
     """Возвращает выбранный размер модели: tiny или base."""
-    global _architecture_cache
-    if _architecture_cache in ARCHITECTURES:
-        return _architecture_cache
-    try:
-        if settings_path().is_file():
-            data = json.loads(settings_path().read_text(encoding="utf-8"))
-            architecture = data.get("architecture")
-            if architecture in ARCHITECTURES:
-                _architecture_cache = architecture
-                return architecture
-    except Exception:
-        pass
-    _architecture_cache = DEFAULT_ARCHITECTURE
-    return DEFAULT_ARCHITECTURE
+    from app_settings import get_firefox_architecture
+
+    return get_firefox_architecture()
 
 
 def set_model_architecture(architecture: str) -> None:
     """Сохраняет выбранный размер модели."""
-    global _architecture_cache
-    if architecture not in ARCHITECTURES:
-        raise ValueError(f"Неизвестный размер модели: {architecture}")
-    _architecture_cache = architecture
-    data = {}
-    try:
-        if settings_path().is_file():
-            data = json.loads(settings_path().read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                data = {}
-    except Exception:
-        data = {}
-    data["architecture"] = architecture
-    settings_path().write_text(
-        json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    from app_settings import set_firefox_architecture
+
+    set_firefox_architecture(architecture)
 
 
 def architecture_label(architecture: str) -> str:

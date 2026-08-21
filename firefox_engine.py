@@ -1,6 +1,5 @@
 import queue
 import threading
-from dataclasses import dataclass
 from pathlib import Path
 
 from language_packages import (
@@ -10,15 +9,7 @@ from language_packages import (
     needed_pairs_for_path,
     resolve_model_path,
 )
-
-
-@dataclass
-class TranslationResult:
-    """Результат перевода: итоговый текст и необязательный промежуточный английский."""
-
-    text: str
-    intermediate: str | None = None
-    pivot_code: str | None = None
+from translation_result import TranslationResult
 
 
 

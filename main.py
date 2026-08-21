@@ -22,20 +22,14 @@ import pystray
 import pystray._util.win32 as win32_util
 from PIL import Image
 
+from app_settings import engine_label, get_engine_name
 from autostart import is_autostart_enabled, set_autostart
 from language_detect import detect_language_code, language_display_name
-from firefox_engine import get_engine
-from language_packages import (
-    ARCHITECTURE_LABELS,
-    architecture_from_label,
-    architecture_label,
-    get_installed_pairs,
-    get_model_architecture,
-    needed_pairs_for_path,
-    set_model_architecture,
-)
 from languages_window import LanguagesWindow
+from packages import get_installed_pairs, needed_pairs_for_path
 from selection_button import TRAY_ICON_PATH, SelectionPopup, choose_selection_direction
+from settings_window import SettingsWindow
+from translation_engine import get_engine, invalidate_engines
 
 
 def patch_pystray_win32() -> None:
@@ -150,20 +144,10 @@ class TranslatorApp:
         self.target_combo.pack(side=tk.LEFT, padx=(4, 10))
         self.target_combo.bind("<<ComboboxSelected>>", self._on_language_choice_changed)
 
-        tk.Label(toolbar, text="Модель:").pack(side=tk.LEFT)
-        self.architecture_var = tk.StringVar(
-            value=architecture_label(get_model_architecture())
-        )
-        self.architecture_combo = ttk.Combobox(
-            toolbar,
-            textvariable=self.architecture_var,
-            values=list(ARCHITECTURE_LABELS.values()),
-            state="readonly",
-            width=20,
-        )
-        self.architecture_combo.pack(side=tk.LEFT, padx=(4, 10))
-        self.architecture_combo.bind(
-            "<<ComboboxSelected>>", self._on_architecture_changed
+        self.engine_label_var = tk.StringVar(value=self._engine_toolbar_text())
+        tk.Label(toolbar, textvariable=self.engine_label_var, fg="#333333").pack(
+            side=tk.LEFT,
+            padx=(0, 10),
         )
 
         self.languages_button = tk.Button(
@@ -172,6 +156,13 @@ class TranslatorApp:
             command=self._open_languages_window,
         )
         self.languages_button.pack(side=tk.RIGHT)
+
+        self.settings_button = tk.Button(
+            toolbar,
+            text="Настройки...",
+            command=self._open_settings_window,
+        )
+        self.settings_button.pack(side=tk.RIGHT, padx=(0, 8))
 
         self.autostart_var = tk.BooleanVar(value=is_autostart_enabled())
         self.autostart_check = tk.Checkbutton(
@@ -452,25 +443,38 @@ class TranslatorApp:
         """Обновляет подпись языка после ручного выбора."""
         self._update_detected_label()
 
-    def _on_architecture_changed(self, _event=None) -> None:
-        """Переключает tiny/base и сбрасывает кэш переводчика."""
+    def _engine_toolbar_text(self) -> str:
+        """Краткая подпись текущего движка на панели."""
         try:
-            architecture = architecture_from_label(self.architecture_var.get())
-            set_model_architecture(architecture)
-            if self.engine is not None:
-                self.engine.invalidate()
-            self._set_status(
-                f"Выбрана модель {architecture}. Если её нет, будет использована другая."
+            return engine_label(get_engine_name())
+        except Exception:
+            return "Движок"
+
+    def _open_settings_window(self) -> None:
+        """Открывает окно выбора движка и размера Firefox."""
+        try:
+            existing = getattr(self, "_settings_window", None)
+            if existing is not None and existing.window.winfo_exists():
+                existing.window.lift()
+                existing.window.focus_force()
+                return
+            self._settings_window = SettingsWindow(
+                self.window,
+                on_settings_changed=self._on_settings_changed,
             )
         except Exception as error:
-            self._set_status(f"Ошибка выбора модели: {error}")
+            self._set_status(f"Ошибка настроек: {error}")
 
-    def _sync_architecture_combo(self) -> None:
-        """Синхронизирует комбобокс с сохранённым размером модели."""
+    def _on_settings_changed(self) -> None:
+        """Применяет новый движок и перечитывает языковые пакеты."""
         try:
-            self.architecture_var.set(architecture_label(get_model_architecture()))
-        except Exception:
-            pass
+            invalidate_engines()
+            self.engine_label_var.set(self._engine_toolbar_text())
+            self._reload_languages_from_ui()
+            self.engine = get_engine()
+            self._set_status(f"Движок: {self._engine_toolbar_text()}")
+        except Exception as error:
+            self._set_status(f"Ошибка смены движка: {error}")
 
     def _update_detected_label(self) -> None:
         """Показывает определённый или выбранный язык ввода."""
@@ -529,7 +533,6 @@ class TranslatorApp:
             self.installed_pairs = get_installed_pairs()
             if self.engine is not None:
                 self.engine.invalidate()
-            self._sync_architecture_combo()
             self._rebuild_language_combos()
             if self.installed_pairs:
                 self.translate_button.config(state=tk.NORMAL)
@@ -548,7 +551,7 @@ class TranslatorApp:
         loader.start()
 
     def _load_model(self) -> None:
-        """Читает установленные пакеты Firefox и прогревает переводчик."""
+        """Читает установленные пакеты текущего движка и прогревает переводчик."""
         try:
             self.engine = get_engine()
             pairs = get_installed_pairs()

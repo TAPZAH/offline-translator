@@ -1,5 +1,5 @@
-from firefox_engine import get_engine
-from language_packages import is_package_installed
+from packages import is_package_installed
+from translation_engine import get_engine
 
 
 def main() -> None:

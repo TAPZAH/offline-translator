@@ -1,5 +1,5 @@
 import pyperclip
-from language_packages import get_installed_pairs
+from packages import get_installed_pairs
 import keyboard
 
 
@@ -14,19 +14,22 @@ def test_pyperclip() -> None:
         print(f"pyperclip: ошибка — {error}")
 
 
-def test_firefox_models() -> None:
-    """Выводит список установленных языковых пакетов Firefox."""
+def test_language_models() -> None:
+    """Выводит список установленных языковых пакетов текущего движка."""
     try:
+        from app_settings import engine_label, get_engine_name
+
         packages = get_installed_pairs()
+        engine = engine_label(get_engine_name())
         if not packages:
-            print("firefox: языковые пакеты не установлены")
+            print(f"{engine}: языковые пакеты не установлены")
             return
 
-        print("firefox: доступные языковые пакеты:")
+        print(f"{engine}: доступные языковые пакеты:")
         for from_code, to_code, _from_name, _to_name in packages:
             print(f"  {from_code} -> {to_code}")
     except Exception as error:
-        print(f"firefox: ошибка — {error}")
+        print(f"модели: ошибка — {error}")
 
 
 def test_keyboard() -> None:
@@ -41,7 +44,7 @@ def test_keyboard() -> None:
 def main() -> None:
     """Запускает проверки библиотек."""
     test_pyperclip()
-    test_firefox_models()
+    test_language_models()
     test_keyboard()
 
 

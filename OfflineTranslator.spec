@@ -14,6 +14,13 @@ hiddenimports = [
     "languages_window",
     "selection_button",
     "firefox_engine",
+    "argos_engine",
+    "argos_packages",
+    "app_settings",
+    "packages",
+    "settings_window",
+    "translation_engine",
+    "translation_result",
     "fxtranslate",
     "fxtranslate._engine",
     "zstandard",
@@ -28,6 +35,8 @@ for package_name in (
     "zstandard",
     "requests",
     "certifi",
+    "argostranslate",
+    "ctranslate2",
 ):
     collected_datas, collected_binaries, collected_hidden = collect_all(package_name)
     datas += collected_datas
@@ -43,7 +52,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "unittest", "torch", "argostranslate", "spacy", "stanza"],
+    excludes=["pytest", "unittest", "torch"],
     noarchive=False,
     optimize=0,
 )

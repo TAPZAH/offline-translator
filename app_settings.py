@@ -6,10 +6,12 @@ import portable_env
 
 ENGINE_FIREFOX = "firefox"
 ENGINE_ARGOS = "argos"
-ENGINES = (ENGINE_FIREFOX, ENGINE_ARGOS)
+ENGINE_NLLB = "nllb"
+ENGINES = (ENGINE_FIREFOX, ENGINE_ARGOS, ENGINE_NLLB)
 ENGINE_LABELS = {
     ENGINE_FIREFOX: "Firefox Translations",
     ENGINE_ARGOS: "Argos Translate",
+    ENGINE_NLLB: "NLLB-200",
 }
 DEFAULT_ENGINE = ENGINE_FIREFOX
 ARCHITECTURES = ("tiny", "base")
@@ -78,7 +80,7 @@ def _save_settings(data: dict) -> None:
 
 
 def get_engine_name() -> str:
-    """Возвращает выбранный движок: firefox или argos."""
+    """Возвращает выбранный движок: firefox, argos или nllb."""
     engine = _load_settings().get("engine")
     if engine in ENGINES:
         return engine

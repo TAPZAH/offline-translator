@@ -35,6 +35,10 @@ def download_and_install(language_package, progress_callback=None) -> None:
 
 def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]:
     """Какие пакеты нужны для прямого или двойного перевода."""
+    backend = _backend()
+    custom = getattr(backend, "needed_pairs_for_path", None)
+    if callable(custom):
+        return custom(from_code, to_code)
     if from_code == to_code:
         return []
     if is_package_installed(from_code, to_code):
@@ -51,10 +55,13 @@ def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]
 
 def _backend():
     """Модуль пакетов выбранного движка."""
-    from app_settings import ENGINE_ARGOS, get_engine_name
+    from app_settings import ENGINE_ARGOS, ENGINE_NLLB, get_engine_name
 
-    if get_engine_name() == ENGINE_ARGOS:
+    engine = get_engine_name()
+    if engine == ENGINE_ARGOS:
         import argos_packages as backend
+    elif engine == ENGINE_NLLB:
+        import nllb_packages as backend
     else:
         import language_packages as backend
     return backend

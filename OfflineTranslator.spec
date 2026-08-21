@@ -16,6 +16,8 @@ hiddenimports = [
     "firefox_engine",
     "argos_engine",
     "argos_packages",
+    "nllb_engine",
+    "nllb_packages",
     "app_settings",
     "packages",
     "settings_window",
@@ -26,6 +28,8 @@ hiddenimports = [
     "zstandard",
     "pyperclip",
     "requests",
+    "packaging",
+    "sentencepiece",
 ]
 
 for package_name in (
@@ -37,6 +41,10 @@ for package_name in (
     "certifi",
     "argostranslate",
     "ctranslate2",
+    "sentencepiece",
+    "packaging",
+    "stanza",
+    "torch",
 ):
     collected_datas, collected_binaries, collected_hidden = collect_all(package_name)
     datas += collected_datas
@@ -52,7 +60,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["pytest", "unittest", "torch"],
+    excludes=["pytest", "unittest"],
     noarchive=False,
     optimize=0,
 )

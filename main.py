@@ -271,6 +271,11 @@ class TranslatorApp:
         source_name = language_display_name(source_code, source_code)
         target_name = language_display_name(target_code, target_code)
         needed = needed_pairs_for_path(source_code, target_code)
+        if needed == [("nllb", "all")]:
+            return (
+                "Модель NLLB не установлена. Откройте «Языки» и скачайте "
+                "NLLB-200 Distilled 600M."
+            )
         if not needed:
             return (
                 f"Нет модели {source_name} → {target_name}. Откройте «Языки»."

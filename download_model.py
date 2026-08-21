@@ -52,8 +52,13 @@ def install_pair(from_code: str, to_code: str, label: str) -> None:
 
 
 def main() -> None:
-    """Скачивает пакеты English ↔ Russian."""
+    """Скачивает пакеты текущего движка: пары en↔ru или модель NLLB."""
     try:
+        from app_settings import ENGINE_NLLB
+
+        if get_engine_name() == ENGINE_NLLB:
+            install_pair("nllb", "all", "NLLB-200 Distilled 600M")
+            return
         install_pair(FROM_CODE, TO_CODE, "English -> Russian")
         install_pair(TO_CODE, FROM_CODE, "Russian -> English")
     except Exception as error:

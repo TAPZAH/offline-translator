@@ -2,7 +2,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 
-from app_settings import ENGINE_FIREFOX, get_engine_name
+from app_settings import ENGINE_ARGOS, ENGINE_FIREFOX, ENGINE_NLLB, get_engine_name
 from language_detect import language_display_name
 from language_packages import (
     ARCHITECTURE_LABELS,
@@ -47,10 +47,17 @@ class LanguagesWindow:
                 "Нет прямой пары — программа переведёт через английский. "
                 "Для китайского нужен размер base."
             )
-        else:
+        elif engine == ENGINE_ARGOS:
             hint_text = (
                 "Пакеты Argos Translate. Нет прямой пары — перевод пойдёт через английский."
             )
+        elif engine == ENGINE_NLLB:
+            hint_text = (
+                "NLLB-200 — одна модель на 200 языков. Скачайте пакет один раз, "
+                "после этого доступны все пары без отдельных языковых файлов."
+            )
+        else:
+            hint_text = "Установите языковые пакеты текущего движка."
         hint = tk.Label(
             self.window,
             text=hint_text,
@@ -310,7 +317,10 @@ class LanguagesWindow:
         from_code, to_code = pair_id.split("->", 1)
         architecture = self._selected_architecture()
         if is_package_installed(from_code, to_code, architecture):
-            label = architecture or "Argos"
+            if from_code == "nllb":
+                label = "NLLB-200"
+            else:
+                label = architecture or "Argos"
             self.status_var.set(f"Пакет {label} уже установлен")
             return
 
@@ -403,7 +413,7 @@ class LanguagesWindow:
             language_package.to_code, language_package.to_name
         )
         arch_label = language_package.architecture
-        if arch_label == "argos":
+        if arch_label in {"argos", "nllb"}:
             self.status_var.set(f"Установлено: {from_name} → {to_name}")
         else:
             self.status_var.set(

@@ -2,7 +2,9 @@ import tkinter as tk
 from tkinter import ttk
 
 from app_settings import (
+    ENGINE_ARGOS,
     ENGINE_FIREFOX,
+    ENGINE_NLLB,
     ENGINE_LABELS,
     engine_from_label,
     engine_label,
@@ -25,8 +27,8 @@ class SettingsWindow:
         self.on_settings_changed = on_settings_changed
         self.window = tk.Toplevel(master)
         self.window.title("Настройки")
-        self.window.geometry("420x240")
-        self.window.minsize(400, 220)
+        self.window.geometry("440x280")
+        self.window.minsize(420, 260)
         self.window.transient(master)
         self.window.grab_set()
         self._create_widgets()
@@ -35,7 +37,7 @@ class SettingsWindow:
         """Создаёт выбор движка и размера модели."""
         hint = tk.Label(
             self.window,
-            text="Firefox — лёгкие модели Mozilla. Argos — прежние модели CTranslate2, обычно точнее на европейских языках.",
+            text="Firefox — лёгкие модели Mozilla. Argos — пакеты CTranslate2 по парам языков. NLLB-200 — одна модель Meta на 200 языков, качество выше на редких языках.",
             wraplength=380,
             justify=tk.LEFT,
         )
@@ -93,9 +95,15 @@ class SettingsWindow:
         if engine == ENGINE_FIREFOX:
             self.size_combo.config(state="readonly")
             self.status_var.set("Для китайского и части языков нужен размер base.")
-        else:
+        elif engine == ENGINE_ARGOS:
             self.size_combo.config(state="disabled")
             self.status_var.set("Argos использует свои пакеты .argosmodel.")
+        elif engine == ENGINE_NLLB:
+            self.size_combo.config(state="disabled")
+            self.status_var.set("NLLB ставится одним пакетом в «Языки» (~600 МБ).")
+        else:
+            self.size_combo.config(state="disabled")
+            self.status_var.set("")
 
     def _on_save(self) -> None:
         """Сохраняет настройки и сообщает главному окну."""

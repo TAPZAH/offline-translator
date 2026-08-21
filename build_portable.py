@@ -17,6 +17,9 @@ FIREFOX_MODELS = (
     Path.home() / ".local" / "share" / "offline-translator" / "firefox-models"
 )
 ARGOS_PACKAGES = Path.home() / ".local" / "share" / "argos-translate" / "packages"
+NLLB_MODELS = (
+    Path.home() / ".local" / "share" / "offline-translator" / "nllb-200"
+)
 
 
 def create_app_icon() -> None:
@@ -41,7 +44,7 @@ def run_pyinstaller() -> None:
 
 
 def copy_language_packages() -> None:
-    """Кладёт оффлайн-модели Firefox и пакеты Argos рядом с exe."""
+    """Кладёт оффлайн-модели Firefox, Argos и NLLB рядом с exe."""
     if not FIREFOX_MODELS.is_dir():
         raise RuntimeError(f"Нет языковых пакетов Firefox: {FIREFOX_MODELS}")
     firefox_target = PORTABLE_DIR / "data" / "firefox-models"
@@ -57,6 +60,15 @@ def copy_language_packages() -> None:
         if argos_target.exists():
             shutil.rmtree(argos_target)
         shutil.copytree(ARGOS_PACKAGES, argos_target)
+    if NLLB_MODELS.is_dir():
+        nllb_target = PORTABLE_DIR / "data" / "nllb-200"
+        if nllb_target.exists():
+            shutil.rmtree(nllb_target)
+        shutil.copytree(
+            NLLB_MODELS,
+            nllb_target,
+            ignore=shutil.ignore_patterns("_downloads"),
+        )
 
 
 def write_readme() -> None:
@@ -64,13 +76,13 @@ def write_readme() -> None:
     text = (
         "Оффлайн Переводчик — портативная версия\n"
         "\n"
-        "Запуск: откройте OfflineTranslator.exe\n"
-        "Программа стартует в системном трее. Python устанавливать не нужно.\n"
-        "Нужны Windows 10 или 11, 64-bit.\n"
+        "Распакуйте архив в любую папку и откройте OfflineTranslator.exe.\n"
+        "Python и интернет для запуска не нужны. Подходят Windows 10 и 11, 64-bit.\n"
+        "Программа стартует в системном трее.\n"
         "\n"
-        "Не удаляйте папки _internal и data — в них движок и языковые модели.\n"
-        "Дополнительные языки можно скачать в окне «Языки...».\n"
-        "Движок (Firefox или Argos) переключается в «Настройки...».\n"
+        "Не удаляйте папки _internal и data — в них движки и языковые модели.\n"
+        "Дополнительные языки можно скачать в окне «Языки...» (нужен интернет).\n"
+        "Движок (Firefox, Argos или NLLB-200) переключается в «Настройки...».\n"
     )
     (PORTABLE_DIR / "Прочитайте.txt").write_text(text, encoding="utf-8")
 

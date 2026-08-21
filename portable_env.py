@@ -42,3 +42,8 @@ def apply() -> None:
         "ARGOS_PACKAGES_DIR",
         os.path.join(data_home, "argos-packages"),
     )
+    os.environ.setdefault(
+        "OFFLINE_TRANSLATOR_NLLB",
+        os.path.join(data_home, "nllb-200"),
+    )
+    os.environ.setdefault("ARGOS_DEVICE_TYPE", "cpu")

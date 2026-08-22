@@ -1,6 +1,7 @@
 import time
 import tkinter as tk
 
+import pyperclip
 from PIL import Image
 
 from selection_button import (
@@ -11,6 +12,8 @@ from selection_button import (
     _flatten_icon_for_window,
     choose_selection_direction,
     should_capture_selection,
+    should_show_selection_button,
+    should_trigger_double_ctrl_c,
 )
 
 
@@ -57,6 +60,45 @@ def test_should_capture_selection() -> None:
     if not should_capture_selection(True, False, 2, 0.05, True):
         raise AssertionError("Двойной клик по слову не распознан")
     print("gesture: ok")
+
+
+def test_ctrl_activation_rules() -> None:
+    """Проверяет режим кнопки с Ctrl и распознавание Ctrl+C+C."""
+    assert should_show_selection_button(False, False)
+    assert should_show_selection_button(True, True)
+    assert not should_show_selection_button(True, False)
+
+    assert should_trigger_double_ctrl_c(10.0, 10.5, True, True)
+    assert not should_trigger_double_ctrl_c(10.0, 10.8, True, True)
+    assert not should_trigger_double_ctrl_c(10.0, 10.5, False, True)
+    assert not should_trigger_double_ctrl_c(10.0, 10.5, True, False)
+    assert not should_trigger_double_ctrl_c(0.0, 10.5, True, True)
+    print("ctrl-activation: ok")
+
+
+def test_clipboard_shortcut_translation() -> None:
+    """Ctrl+C+C берёт выделение из буфера и сразу запускает перевод."""
+    previous_clipboard = pyperclip.paste() or ""
+    root = tk.Tk()
+    root.withdraw()
+    popup = SelectionPopup(root, lambda text: (f"Перевод: {text}", "en", "ru"))
+    try:
+        pyperclip.copy("Hello shortcut")
+        popup._translate_clipboard_selection()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            root.update()
+            if popup._result_window is not None:
+                break
+            time.sleep(0.05)
+        if popup._result_window is None:
+            raise AssertionError("Ctrl+C+C не запустил перевод из буфера")
+        assert popup._selected_text == "Hello shortcut"
+    finally:
+        popup.stop()
+        root.destroy()
+        pyperclip.copy(previous_clipboard)
+    print("clipboard-shortcut: ok")
 
 
 def test_popup_button() -> None:
@@ -159,6 +201,8 @@ if __name__ == "__main__":
     test_icon_center_is_clickable()
     test_direction()
     test_should_capture_selection()
+    test_ctrl_activation_rules()
+    test_clipboard_shortcut_translation()
     test_popup_button()
     test_result_closes_on_click()
     test_real_translate()

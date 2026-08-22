@@ -8,10 +8,14 @@ from app_settings import (
     ENGINE_LABELS,
     engine_from_label,
     engine_label,
+    get_double_ctrl_c_translation,
     get_engine_name,
     get_firefox_architecture,
+    get_popup_requires_ctrl,
+    set_double_ctrl_c_translation,
     set_engine_name,
     set_firefox_architecture,
+    set_popup_requires_ctrl,
 )
 from language_packages import (
     ARCHITECTURE_LABELS,
@@ -27,8 +31,8 @@ class SettingsWindow:
         self.on_settings_changed = on_settings_changed
         self.window = tk.Toplevel(master)
         self.window.title("Настройки")
-        self.window.geometry("440x280")
-        self.window.minsize(420, 260)
+        self.window.geometry("500x420")
+        self.window.minsize(480, 400)
         self.window.transient(master)
         self.window.grab_set()
         self._create_widgets()
@@ -72,6 +76,44 @@ class SettingsWindow:
         )
         self.size_combo.pack(side=tk.LEFT, padx=(8, 0))
 
+        selection_frame = tk.LabelFrame(
+            self.window,
+            text="Перевод выделенного текста",
+            padx=8,
+            pady=6,
+        )
+        selection_frame.pack(fill=tk.X, padx=12, pady=(10, 4))
+
+        self.popup_requires_ctrl_var = tk.BooleanVar(
+            value=get_popup_requires_ctrl()
+        )
+        tk.Checkbutton(
+            selection_frame,
+            text="Показывать кнопку только при удержании Ctrl",
+            variable=self.popup_requires_ctrl_var,
+            anchor=tk.W,
+        ).pack(fill=tk.X)
+
+        self.double_ctrl_c_var = tk.BooleanVar(
+            value=get_double_ctrl_c_translation()
+        )
+        tk.Checkbutton(
+            selection_frame,
+            text="Переводить выделенный текст по Ctrl+C+C",
+            variable=self.double_ctrl_c_var,
+            anchor=tk.W,
+        ).pack(fill=tk.X)
+        tk.Label(
+            selection_frame,
+            text=(
+                "Ctrl+C+C: удерживайте Ctrl и дважды нажмите C. "
+                "Перевод появится рядом с курсором."
+            ),
+            wraplength=440,
+            justify=tk.LEFT,
+            fg="#555555",
+        ).pack(fill=tk.X, padx=(20, 0), pady=(2, 0))
+
         self.status_var = tk.StringVar(value="")
         tk.Label(self.window, textvariable=self.status_var, anchor=tk.W).pack(
             fill=tk.X, padx=12, pady=(8, 4)
@@ -112,6 +154,8 @@ class SettingsWindow:
             set_engine_name(engine)
             if engine == ENGINE_FIREFOX:
                 set_firefox_architecture(architecture_from_label(self.size_var.get()))
+            set_popup_requires_ctrl(self.popup_requires_ctrl_var.get())
+            set_double_ctrl_c_translation(self.double_ctrl_c_var.get())
             self.on_settings_changed()
             self.window.destroy()
         except Exception as error:

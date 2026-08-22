@@ -16,6 +16,8 @@ ENGINE_LABELS = {
 DEFAULT_ENGINE = ENGINE_FIREFOX
 ARCHITECTURES = ("tiny", "base")
 DEFAULT_ARCHITECTURE = "tiny"
+DEFAULT_POPUP_REQUIRES_CTRL = False
+DEFAULT_DOUBLE_CTRL_C_TRANSLATION = False
 
 _settings_cache: dict | None = None
 
@@ -125,4 +127,36 @@ def set_firefox_architecture(architecture: str) -> None:
         raise ValueError(f"Неизвестный размер модели: {architecture}")
     data = dict(_load_settings())
     data["architecture"] = architecture
+    _save_settings(data)
+
+
+def get_popup_requires_ctrl() -> bool:
+    """Нужно ли удерживать Ctrl для появления кнопки после выделения."""
+    value = _load_settings().get(
+        "popup_requires_ctrl",
+        DEFAULT_POPUP_REQUIRES_CTRL,
+    )
+    return value if isinstance(value, bool) else DEFAULT_POPUP_REQUIRES_CTRL
+
+
+def set_popup_requires_ctrl(enabled: bool) -> None:
+    """Сохраняет требование удерживать Ctrl при выделении."""
+    data = dict(_load_settings())
+    data["popup_requires_ctrl"] = bool(enabled)
+    _save_settings(data)
+
+
+def get_double_ctrl_c_translation() -> bool:
+    """Включён ли перевод по двойному C при удерживаемом Ctrl."""
+    value = _load_settings().get(
+        "double_ctrl_c_translation",
+        DEFAULT_DOUBLE_CTRL_C_TRANSLATION,
+    )
+    return value if isinstance(value, bool) else DEFAULT_DOUBLE_CTRL_C_TRANSLATION
+
+
+def set_double_ctrl_c_translation(enabled: bool) -> None:
+    """Сохраняет перевод выделения по Ctrl+C+C."""
+    data = dict(_load_settings())
+    data["double_ctrl_c_translation"] = bool(enabled)
     _save_settings(data)

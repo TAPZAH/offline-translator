@@ -10,6 +10,10 @@ import pyperclip
 from PIL import Image, ImageTk
 
 import portable_env
+from app_settings import (
+    get_double_ctrl_c_translation,
+    get_popup_requires_ctrl,
+)
 from language_detect import detect_language_code, language_display_name
 
 VK_LBUTTON = 0x01
@@ -29,6 +33,7 @@ BUTTON_HIDE_MS = 8000
 POLL_MS = 40
 COPY_WAIT_MS = 80
 CLIPBOARD_WAIT_S = 0.08
+DOUBLE_CTRL_C_S = 0.7
 ICON_SIZE = 40
 ASSETS_DIR = os.path.join(portable_env.resource_dir(), "assets")
 SELECTION_ICON_PATH = os.path.join(ASSETS_DIR, "icon.png")
@@ -89,6 +94,37 @@ def choose_selection_direction(
 def _mouse_pressed() -> bool:
     """Проверяет, зажата ли левая кнопка мыши."""
     return bool(ctypes.windll.user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+
+
+def _key_pressed(key_code: int) -> bool:
+    """Проверяет, удерживается ли клавиша с указанным Windows-кодом."""
+    return bool(ctypes.windll.user32.GetAsyncKeyState(key_code) & 0x8000)
+
+
+def _control_pressed() -> bool:
+    """Проверяет, удерживается ли Ctrl."""
+    return _key_pressed(VK_CONTROL)
+
+
+def should_trigger_double_ctrl_c(
+    previous_press_time: float,
+    current_press_time: float,
+    ctrl_pressed: bool,
+    enabled: bool,
+) -> bool:
+    """Проверяет второй C при непрерывно удерживаемом Ctrl."""
+    if not enabled or not ctrl_pressed or previous_press_time <= 0:
+        return False
+    elapsed = current_press_time - previous_press_time
+    return 0 < elapsed <= DOUBLE_CTRL_C_S
+
+
+def should_show_selection_button(
+    requires_ctrl: bool,
+    ctrl_pressed: bool,
+) -> bool:
+    """Разрешает кнопку всегда или только при удерживаемом Ctrl."""
+    return not requires_ctrl or ctrl_pressed
 
 
 def _cursor_position() -> tuple[int, int]:
@@ -277,7 +313,9 @@ class SelectionPopup:
         self._last_up_x = 0
         self._last_up_y = 0
         self._was_pressed = False
+        self._was_c_pressed = False
         self._last_up_time = 0.0
+        self._last_ctrl_c_time = 0.0
         self._selected_text = ""
         self._button_window: tk.Toplevel | None = None
         self._result_window: tk.Toplevel | None = None
@@ -287,6 +325,7 @@ class SelectionPopup:
         self._is_translating = False
         self._hide_job = None
         self._capture_job = None
+        self._shortcut_job = None
         self._ui_jobs: queue.Queue = queue.Queue()
         self._poll()
 
@@ -335,6 +374,7 @@ class SelectionPopup:
             if not self.root.winfo_exists():
                 return
             self._drain_ui_jobs()
+            self._poll_double_ctrl_c()
             pressed = _mouse_pressed()
             cursor_x, cursor_y = _cursor_position()
             if pressed and not self._was_pressed:
@@ -358,6 +398,41 @@ class SelectionPopup:
             self.root.after(POLL_MS, self._poll)
         except tk.TclError:
             return
+
+    def _poll_double_ctrl_c(self) -> None:
+        """Распознаёт два нажатия C при удерживаемом Ctrl."""
+        enabled = get_double_ctrl_c_translation()
+        ctrl_pressed = _control_pressed()
+        c_pressed = _key_pressed(VK_C)
+
+        if not enabled:
+            self._last_ctrl_c_time = 0.0
+            self._was_c_pressed = c_pressed
+            return
+        if not ctrl_pressed:
+            self._last_ctrl_c_time = 0.0
+
+        if c_pressed and not self._was_c_pressed and ctrl_pressed:
+            now = time.monotonic()
+            if should_trigger_double_ctrl_c(
+                self._last_ctrl_c_time,
+                now,
+                ctrl_pressed,
+                enabled,
+            ):
+                self._last_ctrl_c_time = 0.0
+                if self._shortcut_job is not None:
+                    try:
+                        self.root.after_cancel(self._shortcut_job)
+                    except tk.TclError:
+                        pass
+                self._shortcut_job = self.root.after(
+                    COPY_WAIT_MS,
+                    self._translate_clipboard_selection,
+                )
+            else:
+                self._last_ctrl_c_time = now
+        self._was_c_pressed = c_pressed
 
     def _begin_press(self, cursor_x: int, cursor_y: int) -> None:
         """Запоминает начало жеста мыши."""
@@ -428,6 +503,11 @@ class SelectionPopup:
             is_double_click,
         ):
             return
+        if not should_show_selection_button(
+            get_popup_requires_ctrl(),
+            _control_pressed(),
+        ):
+            return
         if self._capture_job is not None:
             self.root.after_cancel(self._capture_job)
         self._capture_job = self.root.after(
@@ -463,6 +543,19 @@ class SelectionPopup:
             self.show_button(selected, cursor_x, cursor_y)
         except Exception:
             pass
+
+    def _translate_clipboard_selection(self) -> None:
+        """Переводит текст, скопированный вторым нажатием Ctrl+C."""
+        self._shortcut_job = None
+        try:
+            selected = (pyperclip.paste() or "").strip()
+            if len(selected) < 2:
+                return
+            self._selected_text = selected
+            self._hide_button()
+            self._on_translate_click()
+        except Exception as error:
+            self._show_error(str(error))
 
     def show_button(self, text: str, cursor_x: int, cursor_y: int) -> None:
         """Показывает квадратную иконку Recycling у курсора."""

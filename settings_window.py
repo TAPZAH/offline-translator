@@ -6,22 +6,27 @@ from app_settings import (
     ENGINE_FIREFOX,
     ENGINE_NLLB,
     ENGINE_LABELS,
+    RESULT_WINDOW_CLICK_TO_CLOSE,
+    RESULT_WINDOW_SELECTABLE,
     engine_from_label,
     engine_label,
     get_double_ctrl_c_translation,
     get_engine_name,
     get_firefox_architecture,
     get_popup_requires_ctrl,
+    get_result_window_mode,
     set_double_ctrl_c_translation,
     set_engine_name,
     set_firefox_architecture,
     set_popup_requires_ctrl,
+    set_result_window_mode,
 )
 from language_packages import (
     ARCHITECTURE_LABELS,
     architecture_from_label,
     architecture_label,
 )
+from selection_button import TRAY_ICON_PATH
 
 
 class SettingsWindow:
@@ -31,11 +36,24 @@ class SettingsWindow:
         self.on_settings_changed = on_settings_changed
         self.window = tk.Toplevel(master)
         self.window.title("Настройки")
-        self.window.geometry("500x420")
-        self.window.minsize(480, 400)
+        self._set_window_icon()
+        self.window.geometry("520x520")
+        self.window.minsize(500, 500)
         self.window.transient(master)
         self.window.grab_set()
         self._create_widgets()
+
+    def _set_window_icon(self) -> None:
+        """Устанавливает иконку трея в заголовок окна настроек."""
+        self._window_icon = None
+        try:
+            self._window_icon = tk.PhotoImage(
+                file=TRAY_ICON_PATH,
+                master=self.window,
+            )
+            self.window.iconphoto(True, self._window_icon)
+        except (tk.TclError, OSError):
+            self._window_icon = None
 
     def _create_widgets(self) -> None:
         """Создаёт выбор движка и размера модели."""
@@ -114,6 +132,29 @@ class SettingsWindow:
             fg="#555555",
         ).pack(fill=tk.X, padx=(20, 0), pady=(2, 0))
 
+        tk.Label(
+            selection_frame,
+            text="Окно результата:",
+            anchor=tk.W,
+        ).pack(fill=tk.X, pady=(10, 2))
+        self.result_window_mode_var = tk.StringVar(
+            value=get_result_window_mode()
+        )
+        tk.Radiobutton(
+            selection_frame,
+            text="Закрывать нажатием по окну",
+            variable=self.result_window_mode_var,
+            value=RESULT_WINDOW_CLICK_TO_CLOSE,
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=(12, 0))
+        tk.Radiobutton(
+            selection_frame,
+            text="Выделять часть текста; закрывать кнопкой «Закрыть»",
+            variable=self.result_window_mode_var,
+            value=RESULT_WINDOW_SELECTABLE,
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=(12, 0))
+
         self.status_var = tk.StringVar(value="")
         tk.Label(self.window, textvariable=self.status_var, anchor=tk.W).pack(
             fill=tk.X, padx=12, pady=(8, 4)
@@ -156,6 +197,7 @@ class SettingsWindow:
                 set_firefox_architecture(architecture_from_label(self.size_var.get()))
             set_popup_requires_ctrl(self.popup_requires_ctrl_var.get())
             set_double_ctrl_c_translation(self.double_ctrl_c_var.get())
+            set_result_window_mode(self.result_window_mode_var.get())
             self.on_settings_changed()
             self.window.destroy()
         except Exception as error:

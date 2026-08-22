@@ -18,6 +18,13 @@ ARCHITECTURES = ("tiny", "base")
 DEFAULT_ARCHITECTURE = "tiny"
 DEFAULT_POPUP_REQUIRES_CTRL = False
 DEFAULT_DOUBLE_CTRL_C_TRANSLATION = False
+RESULT_WINDOW_CLICK_TO_CLOSE = "click_to_close"
+RESULT_WINDOW_SELECTABLE = "selectable"
+RESULT_WINDOW_MODES = (
+    RESULT_WINDOW_CLICK_TO_CLOSE,
+    RESULT_WINDOW_SELECTABLE,
+)
+DEFAULT_RESULT_WINDOW_MODE = RESULT_WINDOW_CLICK_TO_CLOSE
 
 _settings_cache: dict | None = None
 
@@ -159,4 +166,21 @@ def set_double_ctrl_c_translation(enabled: bool) -> None:
     """Сохраняет перевод выделения по Ctrl+C+C."""
     data = dict(_load_settings())
     data["double_ctrl_c_translation"] = bool(enabled)
+    _save_settings(data)
+
+
+def get_result_window_mode() -> str:
+    """Возвращает режим взаимодействия с окном результата."""
+    mode = _load_settings().get("result_window_mode")
+    if mode in RESULT_WINDOW_MODES:
+        return mode
+    return DEFAULT_RESULT_WINDOW_MODE
+
+
+def set_result_window_mode(mode: str) -> None:
+    """Сохраняет режим взаимодействия с окном результата."""
+    if mode not in RESULT_WINDOW_MODES:
+        raise ValueError(f"Неизвестный режим окна результата: {mode}")
+    data = dict(_load_settings())
+    data["result_window_mode"] = mode
     _save_settings(data)

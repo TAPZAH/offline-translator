@@ -11,8 +11,10 @@ from PIL import Image, ImageTk
 
 import portable_env
 from app_settings import (
+    RESULT_WINDOW_CLICK_TO_CLOSE,
     get_double_ctrl_c_translation,
     get_popup_requires_ctrl,
+    get_result_window_mode,
 )
 from language_detect import detect_language_code, language_display_name
 
@@ -39,12 +41,12 @@ ASSETS_DIR = os.path.join(portable_env.resource_dir(), "assets")
 SELECTION_ICON_PATH = os.path.join(ASSETS_DIR, "icon.png")
 TRAY_ICON_PATH = os.path.join(ASSETS_DIR, "icon-tray.png")
 ICON_TRANSPARENT = "#ff00ff"
-OVERLAY_BG = "#1b1b1f"
-OVERLAY_BORDER = "#4a4a52"
-OVERLAY_TEXT = "#f4f4f5"
-OVERLAY_MUTED = "#a1a1aa"
-OVERLAY_COPY_BG = "#3f3f46"
-OVERLAY_COPY_HOVER = "#52525b"
+OVERLAY_BG = "#f2f2f2"
+OVERLAY_BORDER = "#000000"
+OVERLAY_TEXT = "#000000"
+OVERLAY_MUTED = "#333333"
+OVERLAY_COPY_BG = "#dedede"
+OVERLAY_COPY_HOVER = "#cccccc"
 OVERLAY_FONT = ("Segoe UI", 11)
 OVERLAY_FONT_SMALL = ("Segoe UI", 8)
 OVERLAY_FONT_BUTTON = ("Segoe UI", 9)
@@ -236,7 +238,7 @@ def _style_overlay_window(window: tk.Toplevel) -> None:
     window.attributes("-topmost", True)
     window.configure(bg=OVERLAY_BORDER)
     try:
-        window.attributes("-alpha", 0.92)
+        window.attributes("-alpha", 0.97)
     except tk.TclError:
         pass
 
@@ -321,6 +323,8 @@ class SelectionPopup:
         self._result_window: tk.Toplevel | None = None
         self._translate_button: tk.Label | None = None
         self._copy_button: tk.Button | None = None
+        self._close_button: tk.Button | None = None
+        self._result_text: tk.Text | None = None
         self._icon_photo: ImageTk.PhotoImage | None = None
         self._is_translating = False
         self._hide_job = None
@@ -617,10 +621,11 @@ class SelectionPopup:
             self._ui_jobs.put(lambda message=str(error): self._show_error(message))
 
     def _show_result(self, translated: str, source_code: str, target_code: str) -> None:
-        """Показывает затенённый прямоугольник с переводом."""
+        """Показывает светлое окно с переводом."""
         self._is_translating = False
         self._hide_button()
         self._hide_result()
+        result_mode = get_result_window_mode()
         result_window = tk.Toplevel(self.root)
         _style_overlay_window(result_window)
         cursor_x, cursor_y = _cursor_position()
@@ -640,26 +645,42 @@ class SelectionPopup:
             font=OVERLAY_FONT_SMALL,
         )
         header.pack(fill=tk.X, pady=(0, 6))
-        output = tk.Label(
+        visual_lines = sum(
+            max(1, (len(line) + 39) // 40)
+            for line in (translated.splitlines() or [""])
+        )
+        output = tk.Text(
             inner,
-            text=translated,
-            justify=tk.LEFT,
-            anchor=tk.NW,
-            wraplength=300,
+            width=40,
+            height=min(12, max(2, visual_lines)),
+            wrap=tk.WORD,
             bg=OVERLAY_BG,
             fg=OVERLAY_TEXT,
             font=OVERLAY_FONT,
+            relief=tk.FLAT,
+            bd=0,
+            highlightthickness=0,
+            padx=0,
+            pady=0,
         )
         output.pack(fill=tk.BOTH, expand=True)
+        output.insert("1.0", translated)
+        output.config(state=tk.DISABLED)
 
         def copy_result() -> None:
             try:
-                pyperclip.copy(translated)
+                try:
+                    copied_text = output.get("sel.first", "sel.last")
+                except tk.TclError:
+                    copied_text = translated
+                pyperclip.copy(copied_text)
             except Exception:
                 pass
 
+        buttons = tk.Frame(inner, bg=OVERLAY_BG)
+        buttons.pack(fill=tk.X, pady=(12, 0))
         copy_button = tk.Button(
-            inner,
+            buttons,
             text="Копировать",
             command=copy_result,
             cursor="hand2",
@@ -674,7 +695,7 @@ class SelectionPopup:
             pady=3,
             font=OVERLAY_FONT_BUTTON,
         )
-        copy_button.pack(anchor=tk.E, pady=(12, 0))
+        copy_button.pack(side=tk.RIGHT)
         copy_button.bind(
             "<Enter>",
             lambda _event: copy_button.config(bg=OVERLAY_COPY_HOVER),
@@ -683,9 +704,39 @@ class SelectionPopup:
             "<Leave>",
             lambda _event: copy_button.config(bg=OVERLAY_COPY_BG),
         )
+        close_button = None
+        if result_mode != RESULT_WINDOW_CLICK_TO_CLOSE:
+            close_button = tk.Button(
+                buttons,
+                text="Закрыть",
+                command=self._hide_result,
+                cursor="hand2",
+                bg=OVERLAY_COPY_BG,
+                fg=OVERLAY_TEXT,
+                activebackground=OVERLAY_COPY_HOVER,
+                activeforeground=OVERLAY_TEXT,
+                relief=tk.FLAT,
+                bd=0,
+                highlightthickness=0,
+                padx=10,
+                pady=3,
+                font=OVERLAY_FONT_BUTTON,
+            )
+            close_button.pack(side=tk.RIGHT, padx=(0, 8))
+            close_button.bind(
+                "<Enter>",
+                lambda _event: close_button.config(bg=OVERLAY_COPY_HOVER),
+            )
+            close_button.bind(
+                "<Leave>",
+                lambda _event: close_button.config(bg=OVERLAY_COPY_BG),
+            )
         result_window.bind("<Escape>", lambda _event: self._hide_result())
         self._copy_button = copy_button
-        self._bind_result_click_to_close(result_window, copy_button)
+        self._close_button = close_button
+        self._result_text = output
+        if result_mode == RESULT_WINDOW_CLICK_TO_CLOSE:
+            self._bind_result_click_to_close(result_window, copy_button)
         self._result_window = result_window
 
     def _bind_result_click_to_close(self, widget, copy_button) -> None:
@@ -733,3 +784,5 @@ class SelectionPopup:
             pass
         self._result_window = None
         self._copy_button = None
+        self._close_button = None
+        self._result_text = None

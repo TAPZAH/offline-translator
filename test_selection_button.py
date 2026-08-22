@@ -4,6 +4,8 @@ import tkinter as tk
 import pyperclip
 from PIL import Image
 
+import selection_button
+from app_settings import RESULT_WINDOW_CLICK_TO_CLOSE, RESULT_WINDOW_SELECTABLE
 from selection_button import (
     ICON_SIZE,
     SELECTION_ICON_PATH,
@@ -131,36 +133,76 @@ def test_popup_button() -> None:
 
 def test_result_closes_on_click() -> None:
     """Окно перевода закрывается по клику, кнопка «Копировать» его не закрывает."""
+    original_get_mode = selection_button.get_result_window_mode
+    selection_button.get_result_window_mode = lambda: RESULT_WINDOW_CLICK_TO_CLOSE
     root = tk.Tk()
     root.withdraw()
     popup = SelectionPopup(root, lambda text: ("Привет, мир", "en", "ru"))
-    popup.show_button("Hello world", 80, 80)
-    root.update()
-    popup._on_translate_click()
-    deadline = time.time() + 5
-    while time.time() < deadline:
+    try:
+        popup.show_button("Hello world", 80, 80)
+        root.update()
+        popup._on_translate_click()
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            root.update()
+            if popup._result_window is not None:
+                break
+            time.sleep(0.05)
+        if popup._result_window is None:
+            raise AssertionError("Окно результата не появилось")
+
+        copy_button = popup._copy_button
+        if copy_button is None:
+            raise AssertionError("Кнопка «Копировать» не найдена")
+        copy_button.invoke()
+        root.update()
+        if popup._result_window is None:
+            raise AssertionError("Окно закрылось по кнопке «Копировать»")
+
+        popup._result_window.event_generate("<Button-1>")
         root.update()
         if popup._result_window is not None:
-            break
-        time.sleep(0.05)
-    if popup._result_window is None:
-        raise AssertionError("Окно результата не появилось")
-
-    copy_button = popup._copy_button
-    if copy_button is None:
-        raise AssertionError("Кнопка «Копировать» не найдена")
-    copy_button.invoke()
-    root.update()
-    if popup._result_window is None:
-        raise AssertionError("Окно закрылось по кнопке «Копировать»")
-
-    popup._result_window.event_generate("<Button-1>")
-    root.update()
-    if popup._result_window is not None:
-        raise AssertionError("Окно не закрылось по клику")
-    popup.stop()
-    root.destroy()
+            raise AssertionError("Окно не закрылось по клику")
+    finally:
+        selection_button.get_result_window_mode = original_get_mode
+        popup.stop()
+        root.destroy()
     print("close-on-click: ok")
+
+
+def test_selectable_result_mode() -> None:
+    """В режиме выделения копируется фрагмент, а окно закрывается кнопкой."""
+    original_get_mode = selection_button.get_result_window_mode
+    previous_clipboard = pyperclip.paste() or ""
+    selection_button.get_result_window_mode = lambda: RESULT_WINDOW_SELECTABLE
+    root = tk.Tk()
+    root.withdraw()
+    popup = SelectionPopup(root, lambda text: ("Привет, мир", "en", "ru"))
+    try:
+        popup._show_result("Первое второе третье", "ru", "en")
+        root.update()
+        if popup._result_text is None or popup._close_button is None:
+            raise AssertionError("Режим выделения не создал текст и кнопку закрытия")
+
+        popup._result_window.event_generate("<Button-1>")
+        root.update()
+        if popup._result_window is None:
+            raise AssertionError("Окно закрылось по клику в режиме выделения")
+
+        popup._result_text.tag_add("sel", "1.7", "1.13")
+        popup._copy_button.invoke()
+        assert pyperclip.paste() == "второе"
+
+        popup._close_button.invoke()
+        root.update()
+        if popup._result_window is not None:
+            raise AssertionError("Кнопка «Закрыть» не закрыла окно")
+    finally:
+        selection_button.get_result_window_mode = original_get_mode
+        popup.stop()
+        root.destroy()
+        pyperclip.copy(previous_clipboard)
+    print("selectable-result: ok")
 
 
 def test_real_translate() -> None:
@@ -205,5 +247,6 @@ if __name__ == "__main__":
     test_clipboard_shortcut_translation()
     test_popup_button()
     test_result_closes_on_click()
+    test_selectable_result_mode()
     test_real_translate()
     print("Все проверки прошли")

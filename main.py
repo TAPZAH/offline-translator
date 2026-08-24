@@ -10,6 +10,19 @@ import portable_env
 
 portable_env.apply()
 
+from app_logging import (
+    error_log_path,
+    flush_logs,
+    get_logger,
+    log_exception,
+    setup_logging,
+)
+
+try:
+    setup_logging()
+except Exception as error:
+    print(f"Не удалось включить лог: {error}")
+
 import ctypes
 import os
 import tempfile
@@ -24,11 +37,20 @@ from PIL import Image
 
 try:
     import pyperclip
-except Exception:
+except Exception as error:
     pyperclip = None
+    log_exception("Не удалось импортировать pyperclip", error)
 
-from app_settings import engine_label, get_engine_name
+from app_settings import (
+    DEFAULT_ENGINE,
+    engine_label,
+    get_engine_name,
+    mark_engine_loading,
+    mark_engine_ready,
+    recover_if_previous_boot_crashed,
+)
 from autostart import is_autostart_enabled, set_autostart
+from app_version import window_title
 from language_detect import detect_language_code, language_display_name
 from languages_window import LanguagesWindow
 from packages import get_installed_pairs, needed_pairs_for_path
@@ -62,13 +84,20 @@ def patch_pystray_win32() -> None:
 class TranslatorApp:
     """Главное окно оффлайн-переводчика."""
 
-    def __init__(self, root: tk.Tk, start_minimized: bool = False) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        start_minimized: bool = False,
+        startup_warning: str | None = None,
+    ) -> None:
         # Скрытый корень держит приложение живым, когда окно спрятано в трей
         self.root = root
         self.root.withdraw()
         self.root.protocol("WM_DELETE_WINDOW", lambda: None)
         self.window = tk.Toplevel(self.root)
         self.window.withdraw()
+        self._startup_warning = startup_warning
+        self._hold_status = False
         self.translation = None
         self.engine = None
         self.installed_pairs: list[tuple[str, str, str, str]] = []
@@ -102,7 +131,7 @@ class TranslatorApp:
 
     def _setup_window(self) -> None:
         """Настраивает размер и заголовок окна."""
-        self.window.title("Оффлайн Переводчик")
+        self.window.title(window_title())
         self.window.geometry("720x520")
         self.window.minsize(720, 520)
         self.window.columnconfigure(0, weight=1)
@@ -172,15 +201,6 @@ class TranslatorApp:
             command=self._open_settings_window,
         )
         self.settings_button.pack(side=tk.RIGHT, padx=(0, 8))
-
-        self.autostart_var = tk.BooleanVar(value=is_autostart_enabled())
-        self.autostart_check = tk.Checkbutton(
-            toolbar,
-            text="Автозагрузка",
-            variable=self.autostart_var,
-            command=self._on_autostart_toggle,
-        )
-        self.autostart_check.pack(side=tk.RIGHT, padx=(0, 8))
 
         self.detected_var = tk.StringVar(value="Язык: —")
         tk.Label(toolbar, textvariable=self.detected_var, fg="#333333").pack(
@@ -475,17 +495,21 @@ class TranslatorApp:
                 on_settings_changed=self._on_settings_changed,
             )
         except Exception as error:
+            log_exception("Ошибка настроек", error)
             self._set_status(f"Ошибка настроек: {error}")
 
     def _on_settings_changed(self) -> None:
-        """Применяет новый движок и перечитывает языковые пакеты."""
+        """Применяет новый движок в фоне, чтобы не блокировать и не ронять UI."""
         try:
+            engine_name = get_engine_name()
+            get_logger().info("Смена движка на %s", engine_name)
+            flush_logs()
             invalidate_engines()
+            self.engine = None
             self.engine_label_var.set(self._engine_toolbar_text())
-            self._reload_languages_from_ui()
-            self.engine = get_engine()
-            self._set_status(f"Движок: {self._engine_toolbar_text()}")
+            self._start_model_loading()
         except Exception as error:
+            log_exception("Ошибка смены движка", error)
             self._set_status(f"Ошибка смены движка: {error}")
 
     def _update_detected_label(self) -> None:
@@ -537,6 +561,7 @@ class TranslatorApp:
                 on_packages_changed=self._reload_languages_from_ui,
             )
         except Exception as error:
+            log_exception("Не удалось открыть окно языков", error)
             self._set_status(f"Не удалось открыть окно языков: {error}")
 
     def _reload_languages_from_ui(self) -> None:
@@ -553,6 +578,7 @@ class TranslatorApp:
                 self.translate_button.config(state=tk.DISABLED)
                 self._set_status("Нет установленных пакетов. Откройте «Языки».")
         except Exception as error:
+            log_exception("Ошибка обновления языков", error)
             self._set_status(f"Ошибка обновления языков: {error}")
 
     def _start_model_loading(self) -> None:
@@ -564,10 +590,15 @@ class TranslatorApp:
 
     def _load_model(self) -> None:
         """Читает установленные пакеты текущего движка и прогревает переводчик."""
+        engine_name = get_engine_name()
         try:
+            get_logger().info("Загрузка движка %s", engine_name)
+            mark_engine_loading(engine_name)
+            flush_logs()
             self.engine = get_engine()
             pairs = get_installed_pairs()
             if not pairs:
+                mark_engine_ready()
                 self.root.after(
                     0,
                     lambda: self._on_model_error(
@@ -581,10 +612,16 @@ class TranslatorApp:
                 from_code == "en" and to_code == "ru" for from_code, to_code, *_ in pairs
             )
             if has_en_ru:
+                get_logger().info("Прогрев модели %s: en→ru", engine_name)
+                flush_logs()
                 self.engine.warmup("en", "ru")
 
+            mark_engine_ready()
+            get_logger().info("Движок %s загружен, пакетов: %s", engine_name, len(pairs))
             self.root.after(0, lambda: self._on_languages_loaded(pairs))
         except Exception as error:
+            mark_engine_ready()
+            log_exception(f"Ошибка загрузки движка {engine_name}", error)
             self.root.after(0, lambda message=str(error): self._on_model_error(message))
 
     def _on_languages_loaded(self, pairs: list[tuple[str, str, str, str]]) -> None:
@@ -592,7 +629,11 @@ class TranslatorApp:
         self.installed_pairs = pairs
         self._rebuild_language_combos()
         self.translate_button.config(state=tk.NORMAL)
-        if self._tray_ready:
+        if self._startup_warning:
+            self._set_status(self._startup_warning)
+            self._startup_warning = None
+            self._hold_status = True
+        elif self._tray_ready:
             self._set_status("Модель загружена. Иконка в трее.")
         else:
             self._set_status("Модель загружена")
@@ -604,7 +645,12 @@ class TranslatorApp:
 
     def _on_model_error(self, message: str) -> None:
         """Показывает ошибку загрузки модели в строке статуса."""
-        self._set_status(f"Ошибка загрузки модели: {message}")
+        log_path = error_log_path()
+        prefix = f"{self._startup_warning} " if self._startup_warning else ""
+        self._startup_warning = None
+        if prefix:
+            self._hold_status = True
+        self._set_status(f"{prefix}Ошибка загрузки модели: {message} (лог: {log_path})")
         if self.installed_pairs:
             self.translate_button.config(state=tk.NORMAL)
         else:
@@ -640,6 +686,7 @@ class TranslatorApp:
         except Exception as error:
             self.is_translating = False
             self.translate_button.config(state=tk.NORMAL)
+            log_exception("Ошибка запуска перевода", error)
             self._set_status(f"Ошибка: {error}")
 
     def _resolve_direction(self, text: str) -> tuple[str, str] | None:
@@ -718,6 +765,7 @@ class TranslatorApp:
                 lambda: self._on_translation_done(result, source_code, target_code),
             )
         except Exception as error:
+            log_exception("Ошибка перевода", error)
             self.root.after(
                 0,
                 lambda message=str(error): self._on_translation_error(message),
@@ -771,6 +819,8 @@ class TranslatorApp:
     def _on_tray_ready(self) -> None:
         """Сообщает в статусе, что трей запущен."""
         self._tray_ready = True
+        if self._hold_status or self._startup_warning:
+            return
         if self.installed_pairs:
             self._set_status("Модель загружена. Иконка в трее.")
         else:
@@ -800,12 +850,13 @@ class TranslatorApp:
             self.tray_icon = pystray.Icon(
                 "offline_translator",
                 icon_image,
-                "Оффлайн Переводчик",
+                window_title(),
                 menu,
             )
             # run() блокирует поток, пока не будет вызван stop()
             self.tray_icon.run(setup=self._on_tray_setup)
         except Exception as error:
+            log_exception("Ошибка трея", error)
             self.root.after(
                 0,
                 lambda message=str(error): self._set_status(
@@ -844,27 +895,21 @@ class TranslatorApp:
         except tk.TclError:
             pass
 
-    def _on_autostart_toggle(self) -> None:
-        """Включает или выключает автозагрузку из главного окна."""
-        enabled = bool(self.autostart_var.get())
-        self._apply_autostart(enabled)
-
     def _on_tray_autostart(self, icon, item) -> None:
         """Переключает автозагрузку из меню трея."""
         enabled = not is_autostart_enabled()
         self.root.after(0, lambda: self._apply_autostart(enabled))
 
     def _apply_autostart(self, enabled: bool) -> None:
-        """Сохраняет настройку автозагрузки и обновляет интерфейс."""
+        """Сохраняет настройку автозагрузки и обновляет статус."""
         try:
             set_autostart(enabled)
-            self.autostart_var.set(enabled)
             if enabled:
                 self._set_status("Программа будет запускаться вместе с Windows")
             else:
                 self._set_status("Программа убрана из автозагрузки")
         except Exception as error:
-            self.autostart_var.set(is_autostart_enabled())
+            log_exception("Ошибка автозагрузки", error)
             self._set_status(f"Ошибка автозагрузки: {error}")
 
     def _on_tray_open(self, icon, item) -> None:
@@ -907,9 +952,41 @@ class TranslatorApp:
             pass
 
 
+def _show_startup_error(message: str) -> None:
+    """Показывает фатальную ошибку запуска: в лог и в окно, если tk ещё жив."""
+    log_exception(message)
+    flush_logs()
+    try:
+        from tkinter import messagebox
+
+        messagebox.showerror(
+            "Оффлайн Переводчик",
+            f"{message}\n\nПодробности: {error_log_path()}",
+        )
+    except Exception:
+        print(message)
+
+
 def main() -> None:
     """Запускает графический интерфейс переводчика."""
     try:
+        logger = get_logger()
+        logger.info("Запуск приложения, Python %s", sys.version.split()[0])
+        crashed_engine = recover_if_previous_boot_crashed()
+        startup_warning = None
+        if crashed_engine:
+            logger.error(
+                "Прошлый запуск оборвался на движке %s, сброс на %s",
+                crashed_engine,
+                DEFAULT_ENGINE,
+            )
+            startup_warning = (
+                f"Движок {engine_label(crashed_engine)} аварийно завершился. "
+                f"Сброшен на {engine_label(DEFAULT_ENGINE)}. "
+                f"Лог: {error_log_path()}"
+            )
+        logger.info("Выбранный движок: %s", get_engine_name())
+        flush_logs()
         patch_pystray_win32()
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             "gelezyaka.OfflineTranslator"
@@ -917,13 +994,17 @@ def main() -> None:
         root = tk.Tk()
         root.withdraw()
         # Ссылка на приложение нужна, чтобы обработчики окна не уничтожил GC
-        app = TranslatorApp(root, start_minimized="--minimized" in sys.argv[1:])
+        app = TranslatorApp(
+            root,
+            start_minimized="--minimized" in sys.argv[1:],
+            startup_warning=startup_warning,
+        )
         root.mainloop()
         _ = app
     except tk.TclError as error:
-        print(f"Ошибка интерфейса: {error}")
+        _show_startup_error(f"Ошибка интерфейса: {error}")
     except Exception as error:
-        print(f"Неожиданная ошибка: {error}")
+        _show_startup_error(f"Неожиданная ошибка: {error}")
 
 
 if __name__ == "__main__":

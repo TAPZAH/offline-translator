@@ -64,6 +64,12 @@ class ThreadedEngine:
                 else:
                     reply.put(RuntimeError(f"Неизвестное действие: {action}"))
             except Exception as error:
+                from app_logging import log_exception
+
+                log_exception(
+                    f"Ошибка движка {self._thread.name}, действие {action}",
+                    error,
+                )
                 reply.put(error)
 
     def _create_state(self):
@@ -78,8 +84,13 @@ class ThreadedEngine:
         """Прогревает модель пробным переводом; ошибка не пробрасывается."""
         try:
             self._worker_translate(state, "Hello", source_code, target_code)
-        except Exception:
-            pass
+        except Exception as error:
+            from app_logging import log_exception
+
+            log_exception(
+                f"Прогрев {self._thread.name} {source_code}→{target_code} не удался",
+                error,
+            )
 
     def _worker_translate(self, state, text: str, source_code: str, target_code: str):
         """Выполняет перевод в рабочем потоке."""

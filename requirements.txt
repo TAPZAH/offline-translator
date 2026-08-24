@@ -1,0 +1,12 @@
+pyperclip
+fxtranslate
+argostranslate
+ctranslate2
+sentencepiece
+zstandard
+pystray
+pillow
+langdetect
+requests
+packaging
+pyinstaller

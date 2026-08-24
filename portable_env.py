@@ -22,7 +22,12 @@ def resource_dir() -> str:
 
 
 def apply() -> None:
-    """Для портативной сборки складывает модели рядом с exe."""
+    """Настраивает безопасные переменные Argos и пути портативной сборки."""
+    # Всегда, не только в exe: иначе Argos тянет Stanza/torch и падает вместе с tkinter.
+    os.environ.setdefault("ARGOS_DEVICE_TYPE", "cpu")
+    os.environ.setdefault("ARGOS_CHUNK_TYPE", "MINISBD")
+    os.environ.setdefault("ARGOS_STANZA_AVAILABLE", "0")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     if not is_frozen():
         return
     data_home = os.path.join(app_dir(), "data")
@@ -46,4 +51,3 @@ def apply() -> None:
         "OFFLINE_TRANSLATOR_NLLB",
         os.path.join(data_home, "nllb-200"),
     )
-    os.environ.setdefault("ARGOS_DEVICE_TYPE", "cpu")

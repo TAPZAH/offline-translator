@@ -55,7 +55,30 @@ def main() -> None:
     """Скачивает пакеты текущего движка: пары en↔ru или модель NLLB."""
     try:
         from app_settings import ENGINE_NLLB
+        from nllb_packages import (
+            download_and_install as download_nllb,
+            get_available_pairs as nllb_pairs,
+            is_model_installed,
+        )
 
+        if "--nllb" in sys.argv:
+            package = nllb_pairs()[0]
+
+            def on_progress(downloaded: int, total: int, message: str) -> None:
+                if total:
+                    percent = min(100, downloaded * 100 / total)
+                    print(f"\r{message} {percent:.0f}%", end="", flush=True)
+                else:
+                    print(f"\r{message}", end="", flush=True)
+
+            download_nllb(package, on_progress)
+            print()
+            if is_model_installed():
+                print("Модель NLLB-200 Distilled 600M установлена")
+            else:
+                print("Модель NLLB скачана, но файлы не найдены")
+                sys.exit(1)
+            return
         if get_engine_name() == ENGINE_NLLB:
             install_pair("nllb", "all", "NLLB-200 Distilled 600M")
             return

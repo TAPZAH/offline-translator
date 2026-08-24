@@ -1,6 +1,8 @@
 import tkinter as tk
 from tkinter import ttk
 
+from autostart import is_autostart_enabled, set_autostart
+from app_logging import get_logger, log_exception
 from app_settings import (
     ENGINE_ARGOS,
     ENGINE_FIREFOX,
@@ -37,8 +39,8 @@ class SettingsWindow:
         self.window = tk.Toplevel(master)
         self.window.title("Настройки")
         self._set_window_icon()
-        self.window.geometry("520x520")
-        self.window.minsize(500, 500)
+        self.window.geometry("520x580")
+        self.window.minsize(500, 560)
         self.window.transient(master)
         self.window.grab_set()
         self._create_widgets()
@@ -155,6 +157,21 @@ class SettingsWindow:
             anchor=tk.W,
         ).pack(fill=tk.X, padx=(12, 0))
 
+        launch_frame = tk.LabelFrame(
+            self.window,
+            text="Запуск",
+            padx=8,
+            pady=6,
+        )
+        launch_frame.pack(fill=tk.X, padx=12, pady=(10, 4))
+        self.autostart_var = tk.BooleanVar(value=is_autostart_enabled())
+        tk.Checkbutton(
+            launch_frame,
+            text="Запускать вместе с Windows",
+            variable=self.autostart_var,
+            anchor=tk.W,
+        ).pack(fill=tk.X)
+
         self.status_var = tk.StringVar(value="")
         tk.Label(self.window, textvariable=self.status_var, anchor=tk.W).pack(
             fill=tk.X, padx=12, pady=(8, 4)
@@ -198,7 +215,10 @@ class SettingsWindow:
             set_popup_requires_ctrl(self.popup_requires_ctrl_var.get())
             set_double_ctrl_c_translation(self.double_ctrl_c_var.get())
             set_result_window_mode(self.result_window_mode_var.get())
+            set_autostart(bool(self.autostart_var.get()))
+            get_logger().info("Сохранены настройки, движок=%s", engine)
             self.on_settings_changed()
             self.window.destroy()
         except Exception as error:
+            log_exception("Ошибка сохранения настроек", error)
             self.status_var.set(f"Ошибка сохранения: {error}")

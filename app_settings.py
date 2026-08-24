@@ -105,6 +105,58 @@ def set_engine_name(engine: str) -> None:
     _save_settings(data)
 
 
+def boot_marker_path() -> Path:
+    """Маркер незавершённой загрузки движка — для восстановления после краша."""
+    return data_root() / "boot.json"
+
+
+def mark_engine_loading(engine: str) -> None:
+    """Помечает, что сейчас грузится движок. Если процесс умрёт — следующий запуск это увидит."""
+    try:
+        boot_marker_path().write_text(
+            json.dumps({"engine": engine, "status": "loading"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def mark_engine_ready() -> None:
+    """Снимает маркер загрузки: процесс не упал нативно."""
+    try:
+        boot_marker_path().write_text(
+            json.dumps({"status": "ready"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def recover_if_previous_boot_crashed() -> str | None:
+    """Если прошлый запуск умер при загрузке движка, сбрасывает его на Firefox.
+
+    Нативный краш (torch/OpenMP) Python не ловит, поэтому в settings.json
+    остаётся Argos, и программа больше не стартует.
+    """
+    path = boot_marker_path()
+    try:
+        if not path.is_file():
+            return None
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict) or loaded.get("status") != "loading":
+            return None
+        crashed = loaded.get("engine")
+        if crashed not in ENGINES:
+            mark_engine_ready()
+            return None
+        if get_engine_name() == crashed:
+            set_engine_name(DEFAULT_ENGINE)
+        mark_engine_ready()
+        return crashed
+    except Exception:
+        return None
+
+
 def engine_label(engine: str) -> str:
     """Подпись движка для интерфейса."""
     return ENGINE_LABELS.get(engine, engine)

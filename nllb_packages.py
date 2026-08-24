@@ -14,7 +14,7 @@ HF_REPO = "mijuanlo/nllb-200-distilled-600M-ct2-int8"
 HF_FILES = ("model.bin", "shared_vocabulary.json", "sentencepiece.bpe.model")
 CHUNK_SIZE = 64 * 1024
 REQUEST_TIMEOUT = (15, 300)
-REQUEST_HEADERS = {"User-Agent": "offline-translator/1.0 (nllb-200)"}
+REQUEST_HEADERS = {"User-Agent": "offline-translator/0.97-beta (nllb-200)"}
 
 # ISO-639 → коды FLORES-200, которые принимает NLLB
 NLLB_LANG_CODES = {
@@ -226,8 +226,6 @@ def download_and_install(language_package, progress_callback=None) -> None:
         return
 
     staging = models_dir() / "_downloads" / MODEL_ID
-    if staging.exists():
-        shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
 
     for file_name in HF_FILES:
@@ -256,26 +254,47 @@ def download_and_install(language_package, progress_callback=None) -> None:
 
 
 def _download_hf_file(file_name: str, destination: Path, progress_callback) -> None:
-    """Качает один файл модели, пробуя Hugging Face и зеркало."""
+    """Качает один файл модели, докачивая прерванную загрузку при наличии .part."""
+    if destination.is_file() and destination.stat().st_size > 0:
+        if progress_callback:
+            progress_callback(1, 1, f"{file_name} уже скачан")
+        return
+
     urls = [
         f"https://huggingface.co/{HF_REPO}/resolve/main/{file_name}?download=true",
         f"https://hf-mirror.com/{HF_REPO}/resolve/main/{file_name}?download=true",
     ]
+    tmp_path = destination.with_suffix(destination.suffix + ".part")
     last_error: Exception | None = None
     for url in urls:
         try:
+            existing = tmp_path.stat().st_size if tmp_path.is_file() else 0
+            headers = dict(REQUEST_HEADERS)
+            if existing:
+                headers["Range"] = f"bytes={existing}-"
             with requests.get(
                 url,
-                headers=REQUEST_HEADERS,
+                headers=headers,
                 timeout=REQUEST_TIMEOUT,
                 stream=True,
             ) as response:
+                if response.status_code == 416 and existing:
+                    tmp_path.replace(destination)
+                    return
                 response.raise_for_status()
-                total = int(response.headers.get("Content-Length") or 0)
-                downloaded = 0
-                tmp_path = destination.with_suffix(destination.suffix + ".part")
-                last_report = -CHUNK_SIZE
-                with open(tmp_path, "wb") as handle:
+                if existing and response.status_code == 200:
+                    existing = 0
+                    write_mode = "wb"
+                else:
+                    write_mode = "ab" if existing else "wb"
+                content_range = response.headers.get("Content-Range") or ""
+                if "/" in content_range:
+                    total = int(content_range.rsplit("/", 1)[1])
+                else:
+                    total = existing + int(response.headers.get("Content-Length") or 0)
+                downloaded = existing
+                last_report = downloaded - CHUNK_SIZE
+                with open(tmp_path, write_mode) as handle:
                     for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
                         if not chunk:
                             continue

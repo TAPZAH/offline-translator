@@ -37,7 +37,10 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
                     language_display_name(to_code, item.to_name or to_code),
                 )
             )
-    except Exception:
+    except Exception as error:
+        from app_logging import log_exception
+
+        log_exception("Не удалось прочитать пакеты Argos", error)
         _installed_pairs_cache = []
         _installed_pair_set = set()
         return _installed_pairs_cache
@@ -45,6 +48,23 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
     _installed_pairs_cache = pairs
     _installed_pair_set = {(from_code, to_code) for from_code, to_code, *_ in pairs}
     return pairs
+
+
+def get_installed_package(from_code: str, to_code: str):
+    """Возвращает установленный пакет Argos для пары языков."""
+    try:
+        from argostranslate import package
+
+        for item in package.get_installed_packages():
+            if getattr(item, "type", "translate") != "translate":
+                continue
+            if item.from_code == from_code and item.to_code == to_code:
+                return item
+    except Exception as error:
+        from app_logging import log_exception
+
+        log_exception("Не удалось найти пакет Argos", error)
+    return None
 
 
 def is_package_installed(
@@ -105,7 +125,10 @@ def get_available_pairs(architecture: str | None = None) -> list[LanguagePackage
                 )
             )
         return packages
-    except Exception:
+    except Exception as error:
+        from app_logging import log_exception
+
+        log_exception("Не удалось получить каталог пакетов Argos", error)
         return []
 
 
@@ -136,21 +159,23 @@ def download_and_install(language_package, progress_callback=None) -> None:
     if argos_package is None:
         raise RuntimeError("Пакет Argos не найден в каталоге")
 
-    from argostranslate import package
-    from argostranslate.translate import get_installed_languages
+    import zipfile
+
+    from argostranslate import package, settings
 
     if progress_callback:
         progress_callback(0, 1, "Скачиваю пакет Argos...")
     download_path = argos_package.download()
     if progress_callback:
         progress_callback(1, 1, "Устанавливаю пакет Argos...")
-    package.install_from_path(download_path)
+    # Не вызываем package.install_from_path: он импортирует translate → Stanza/torch.
+    with package.package_lock:
+        if not zipfile.is_zipfile(download_path):
+            raise RuntimeError("Скачанный файл — не пакет Argos")
+        with zipfile.ZipFile(download_path, "r") as zipf:
+            zipf.extractall(path=settings.package_data_dir)
     try:
         download_path.unlink()
-    except Exception:
-        pass
-    try:
-        get_installed_languages.cache_clear()
     except Exception:
         pass
     invalidate_cache()

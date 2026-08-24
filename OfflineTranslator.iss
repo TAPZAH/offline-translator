@@ -1,10 +1,10 @@
-; Самодостаточный установщик Оффлайн Переводчика для Windows 10/11 x64.
+; Установщик Оффлайн Переводчика для Windows 10/11 x64 (без языковых моделей).
 
 #define AppName "Оффлайн Переводчик"
-#define AppVersion "1.0.0"
+#define AppVersion "0.97-beta"
 #define AppPublisher "Gelezyaka"
 #define AppExeName "OfflineTranslator.exe"
-#define PortableDir "dist\offline-translator-portable"
+#define PortableDir "dist\offline-translator-portable-lite"
 
 [Setup]
 AppId={{255ec5d1-6b1b-490e-bfb4-5ae7de3e2074}
@@ -17,8 +17,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-OutputDir=installer-dist
-OutputBaseFilename=offline-translator-setup
+OutputDir=release
+OutputBaseFilename=offline-translator-0.97-beta-setup
 SetupIconFile=assets\app.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 Compression=lzma2/max
@@ -26,11 +26,11 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion=0.97.0.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion={#AppVersion}
+VersionInfoProductVersion=0.97.0.0
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"

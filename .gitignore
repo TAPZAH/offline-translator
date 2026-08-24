@@ -4,6 +4,8 @@ __pycache__/
 dist/
 installer-dist/
 build/
+release/*.zip
+release/*.exe
 *.zip
 .venv/
 venv/

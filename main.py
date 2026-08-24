@@ -107,6 +107,7 @@ class TranslatorApp:
         self._is_exiting = False
         self._tray_ready = False
         self._detect_job = None
+        self._load_generation = 0
         self._languages_dialog = None
         self.selection_popup = None
 
@@ -585,24 +586,35 @@ class TranslatorApp:
         """Запускает загрузку установленных языковых пакетов в фоне."""
         self._set_status("Загрузка модели...")
         self.translate_button.config(state=tk.DISABLED)
-        loader = threading.Thread(target=self._load_model, daemon=True)
+        self._load_generation += 1
+        generation = self._load_generation
+        mark_engine_loading(get_engine_name())
+        loader = threading.Thread(
+            target=self._load_model,
+            args=(generation,),
+            daemon=True,
+        )
         loader.start()
 
-    def _load_model(self) -> None:
+    def _load_model(self, generation: int) -> None:
         """Читает установленные пакеты текущего движка и прогревает переводчик."""
         engine_name = get_engine_name()
         try:
             get_logger().info("Загрузка движка %s", engine_name)
             mark_engine_loading(engine_name)
             flush_logs()
-            self.engine = get_engine()
+            engine = get_engine()
             pairs = get_installed_pairs()
+            if generation != self._load_generation:
+                return
+            self.engine = engine
             if not pairs:
                 mark_engine_ready()
                 self.root.after(
                     0,
-                    lambda: self._on_model_error(
-                        "Нет установленных пакетов. Откройте «Языки»."
+                    lambda g=generation: self._on_model_error(
+                        "Нет установленных пакетов. Откройте «Языки».",
+                        g,
                     ),
                 )
                 return
@@ -614,18 +626,38 @@ class TranslatorApp:
             if has_en_ru:
                 get_logger().info("Прогрев модели %s: en→ru", engine_name)
                 flush_logs()
-                self.engine.warmup("en", "ru")
+                engine.warmup("en", "ru")
 
+            if generation != self._load_generation:
+                return
             mark_engine_ready()
             get_logger().info("Движок %s загружен, пакетов: %s", engine_name, len(pairs))
-            self.root.after(0, lambda: self._on_languages_loaded(pairs))
+            self.root.after(
+                0,
+                lambda g=generation, p=pairs: self._on_languages_loaded(p, g),
+            )
         except Exception as error:
+            if generation != self._load_generation:
+                return
             mark_engine_ready()
             log_exception(f"Ошибка загрузки движка {engine_name}", error)
-            self.root.after(0, lambda message=str(error): self._on_model_error(message))
+            self.root.after(
+                0,
+                lambda message=str(error), g=generation: self._on_model_error(
+                    message, g
+                ),
+            )
 
-    def _on_languages_loaded(self, pairs: list[tuple[str, str, str, str]]) -> None:
+    def _on_languages_loaded(
+        self,
+        pairs: list[tuple[str, str, str, str]],
+        generation: int | None = None,
+    ) -> None:
         """Включает перевод после загрузки списка пакетов."""
+        if self._is_exiting:
+            return
+        if generation is not None and generation != self._load_generation:
+            return
         self.installed_pairs = pairs
         self._rebuild_language_combos()
         self.translate_button.config(state=tk.NORMAL)
@@ -638,13 +670,12 @@ class TranslatorApp:
         else:
             self._set_status("Модель загружена")
 
-    def _on_model_loaded(self) -> None:
-        """Совместимость со старым статусом трея."""
-        if self.installed_pairs:
-            self._on_languages_loaded(self.installed_pairs)
-
-    def _on_model_error(self, message: str) -> None:
+    def _on_model_error(self, message: str, generation: int | None = None) -> None:
         """Показывает ошибку загрузки модели в строке статуса."""
+        if self._is_exiting:
+            return
+        if generation is not None and generation != self._load_generation:
+            return
         log_path = error_log_path()
         prefix = f"{self._startup_warning} " if self._startup_warning else ""
         self._startup_warning = None
@@ -778,6 +809,8 @@ class TranslatorApp:
         target_code: str,
     ) -> None:
         """Показывает готовый перевод и промежуточный шаг, если он был."""
+        if self._is_exiting:
+            return
         self._set_pivot_text(result.intermediate, result.pivot_code)
         self._set_output_text(result.text)
         self._set_status(self._route_status(source_code, target_code))
@@ -786,6 +819,8 @@ class TranslatorApp:
 
     def _on_translation_error(self, message: str) -> None:
         """Показывает ошибку перевода, не закрывая окно."""
+        if self._is_exiting:
+            return
         self._set_pivot_text(None)
         self._set_status(f"Ошибка перевода: {message}")
         self.is_translating = False
@@ -793,7 +828,8 @@ class TranslatorApp:
 
     def _create_tray_image_file(self) -> str:
         """Готовит иконку трея из файла icon-tray.png."""
-        image = Image.open(TRAY_ICON_PATH).convert("RGBA")
+        with Image.open(TRAY_ICON_PATH) as opened:
+            image = opened.convert("RGBA")
         image = image.resize((64, 64), Image.Resampling.LANCZOS)
 
         file_handle, file_path = tempfile.mkstemp(suffix=".ico")
@@ -927,6 +963,16 @@ class TranslatorApp:
     def _shutdown(self) -> None:
         """Корректно уничтожает окно и удаляет временную иконку."""
         self._is_exiting = True
+        if self._detect_job is not None:
+            try:
+                self.window.after_cancel(self._detect_job)
+            except tk.TclError:
+                pass
+            self._detect_job = None
+        try:
+            invalidate_engines(timeout=1)
+        except Exception:
+            pass
         try:
             if self.selection_popup is not None:
                 self.selection_popup.stop()

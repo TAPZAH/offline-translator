@@ -38,6 +38,53 @@ def download_and_install(language_package, progress_callback=None) -> None:
     invalidate_caches()
 
 
+def uninstall_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> None:
+    """Удаляет языковой пакет текущего движка с диска."""
+    _unload_engine_models()
+    backend = _backend()
+    uninstall = getattr(backend, "uninstall_package", None)
+    if not callable(uninstall):
+        raise RuntimeError("Удаление пакетов для этого движка не поддерживается")
+    uninstall(from_code, to_code, architecture)
+    invalidate_caches()
+
+
+def redownload_package(language_package, progress_callback=None) -> None:
+    """Удаляет пакет и скачивает его заново."""
+    architecture = getattr(language_package, "architecture", None)
+    if architecture in {"argos", "nllb"}:
+        architecture = None
+    uninstall_package(
+        language_package.from_code,
+        language_package.to_code,
+        architecture,
+    )
+    download_and_install(language_package, progress_callback)
+
+
+def has_incomplete_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> bool:
+    """Проверяет, остались ли на диске обломки пакета."""
+    backend = _backend()
+    check = getattr(backend, "has_incomplete_package", None)
+    if callable(check):
+        return check(from_code, to_code, architecture)
+    return False
+
+
+def _unload_engine_models() -> None:
+    """Сбрасывает загруженные Translator, чтобы файлы модели можно было удалить."""
+    try:
+        from translation_engine import get_engine
+
+        get_engine().invalidate()
+    except Exception:
+        pass
+
+
 def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]:
     """Какие пакеты нужны для прямого или двойного перевода."""
     backend = _backend()
@@ -49,6 +96,9 @@ def needed_pairs_for_path(from_code: str, to_code: str) -> list[tuple[str, str]]
 
 def invalidate_caches() -> None:
     """Сбрасывает кэш списков пакетов всех движков."""
+    global _cached_backend, _cached_engine_name
+    _cached_backend = None
+    _cached_engine_name = None
     for module_name in ("language_packages", "argos_packages", "nllb_packages"):
         try:
             module = __import__(module_name)

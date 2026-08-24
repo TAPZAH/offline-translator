@@ -30,7 +30,12 @@ class ArgosEngine(ThreadedEngine):
 
     def _worker_invalidate(self, state) -> None:
         """Сбрасывает кэш моделей и список пакетов Argos."""
-        state["translators"].clear()
+        translators = state.get("translators")
+        if isinstance(translators, dict):
+            for key in list(translators):
+                translators[key] = None
+            translators.clear()
+        state["translators"] = {}
         try:
             from argos_packages import invalidate_cache
 

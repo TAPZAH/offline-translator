@@ -24,14 +24,18 @@ def get_engine():
         raise
 
 
-def invalidate_engines() -> None:
-    """Сбрасывает кэш уже созданных движков и списков пакетов."""
+def invalidate_engines(*, timeout: float = 30) -> None:
+    """Останавливает старые движки, чтобы не копить потоки и модели в памяти."""
     for module_name in ("firefox_engine", "argos_engine", "nllb_engine"):
         try:
             module = __import__(module_name)
             engine = getattr(module, "_engine", None)
             if engine is not None:
-                engine.invalidate()
+                try:
+                    engine.stop(timeout=timeout)
+                except Exception:
+                    engine.invalidate()
+                module._engine = None
         except Exception as error:
             log_exception(f"Не удалось сбросить кэш движка {module_name}", error)
     try:

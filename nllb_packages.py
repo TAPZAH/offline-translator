@@ -14,7 +14,9 @@ HF_REPO = "mijuanlo/nllb-200-distilled-600M-ct2-int8"
 HF_FILES = ("model.bin", "shared_vocabulary.json", "sentencepiece.bpe.model")
 CHUNK_SIZE = 64 * 1024
 REQUEST_TIMEOUT = (15, 300)
-REQUEST_HEADERS = {"User-Agent": "offline-translator/0.97-beta (nllb-200)"}
+REQUEST_HEADERS = {"User-Agent": "offline-translator/0.98-beta (nllb-200)"}
+# Distilled 600M int8 весит около 622 МБ; меньше — обрезанная или битая загрузка
+MIN_MODEL_BIN_BYTES = 500 * 1024 * 1024
 
 # ISO-639 → коды FLORES-200, которые принимает NLLB
 NLLB_LANG_CODES = {
@@ -122,8 +124,10 @@ def is_model_installed() -> bool:
     if _model_installed_cache is not None:
         return _model_installed_cache
     root = model_path()
+    model_bin = root / "model.bin"
     installed = (
-        (root / "model.bin").is_file()
+        model_bin.is_file()
+        and model_bin.stat().st_size >= MIN_MODEL_BIN_BYTES
         and (root / "shared_vocabulary.json").is_file()
         and (root / "sentencepiece.bpe.model").is_file()
         and (root / "config.json").is_file()
@@ -218,6 +222,36 @@ def get_available_pairs(architecture: str | None = None) -> list[LanguagePackage
     ]
 
 
+def has_incomplete_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> bool:
+    """True, если файлы NLLB есть, но модель нельзя считать установленной."""
+    del from_code, to_code, architecture
+    if is_model_installed():
+        return False
+    if model_path().exists():
+        return True
+    downloads = models_dir() / "_downloads"
+    try:
+        return downloads.is_dir() and any(downloads.iterdir())
+    except OSError:
+        return False
+
+
+def uninstall_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> None:
+    """Удаляет модель NLLB и незавершённые загрузки."""
+    del from_code, to_code, architecture
+    for path in (model_path(), models_dir() / "_downloads"):
+        if path.exists():
+            try:
+                shutil.rmtree(path)
+            except OSError as error:
+                raise RuntimeError(f"Не удалось удалить модель NLLB: {error}") from error
+    invalidate_cache()
+
+
 def download_and_install(language_package, progress_callback=None) -> None:
     """Скачивает CTranslate2-модель NLLB с Hugging Face."""
     if is_model_installed():
@@ -256,9 +290,10 @@ def download_and_install(language_package, progress_callback=None) -> None:
 def _download_hf_file(file_name: str, destination: Path, progress_callback) -> None:
     """Качает один файл модели, докачивая прерванную загрузку при наличии .part."""
     if destination.is_file() and destination.stat().st_size > 0:
-        if progress_callback:
-            progress_callback(1, 1, f"{file_name} уже скачан")
-        return
+        if file_name != "model.bin" or destination.stat().st_size >= MIN_MODEL_BIN_BYTES:
+            if progress_callback:
+                progress_callback(1, 1, f"{file_name} уже скачан")
+            return
 
     urls = [
         f"https://huggingface.co/{HF_REPO}/resolve/main/{file_name}?download=true",

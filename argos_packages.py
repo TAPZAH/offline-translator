@@ -1,3 +1,5 @@
+import shutil
+
 from language_detect import language_display_name
 from language_packages import LanguagePackage
 from translation_route import needed_english_pivot_pairs
@@ -130,6 +132,37 @@ def get_available_pairs(architecture: str | None = None) -> list[LanguagePackage
 
         log_exception("Не удалось получить каталог пакетов Argos", error)
         return []
+
+
+def has_incomplete_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> bool:
+    """Argos либо установлен целиком, либо его нет."""
+    del from_code, to_code, architecture
+    return False
+
+
+def uninstall_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> None:
+    """Удаляет каталог пакета Argos без вызова argostranslate.translate."""
+    del architecture
+    pkg = get_installed_package(from_code, to_code)
+    if pkg is None:
+        invalidate_cache()
+        return
+    package_path = getattr(pkg, "package_path", None)
+    if package_path is None:
+        raise RuntimeError(f"У пакета Argos {from_code} → {to_code} нет пути на диске")
+    try:
+        shutil.rmtree(package_path)
+    except OSError as error:
+        raise RuntimeError(
+            f"Не удалось удалить пакет Argos {from_code} → {to_code}: {error}"
+        ) from error
+    invalidate_cache()
+    if is_package_installed(from_code, to_code):
+        raise RuntimeError(f"Пакет Argos {from_code} → {to_code} не удалось удалить")
 
 
 def download_and_install(language_package, progress_callback=None) -> None:

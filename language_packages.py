@@ -314,6 +314,44 @@ def get_available_pairs(architecture: str | None = None) -> list[LanguagePackage
     return packages
 
 
+def has_incomplete_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> bool:
+    """True, если папка пары есть, но в ней нет готовой модели."""
+    chosen = architecture or get_model_architecture()
+    path = pair_dir(from_code, to_code, chosen)
+    if path.is_dir() and not _model_ready(path):
+        return True
+    if chosen == "tiny":
+        legacy = models_dir() / f"{from_code}-{to_code}"
+        if legacy.is_dir() and not _model_ready(legacy):
+            return True
+    return False
+
+
+def uninstall_package(
+    from_code: str, to_code: str, architecture: str | None = None
+) -> None:
+    """Удаляет установленную пару Firefox и её незавершённую загрузку."""
+    chosen = architecture or get_model_architecture()
+    targets = [
+        pair_dir(from_code, to_code, chosen),
+        models_dir() / "_downloads" / f"{chosen}-{from_code}-{to_code}",
+    ]
+    if chosen == "tiny":
+        targets.append(models_dir() / f"{from_code}-{to_code}")
+    for path in targets:
+        if not path.exists():
+            continue
+        try:
+            _remove_tree(path)
+        except OSError as error:
+            raise RuntimeError(
+                f"Не удалось удалить пакет Firefox {from_code} → {to_code}: {error}"
+            ) from error
+    invalidate_cache()
+
+
 def download_and_install(language_package, progress_callback=None) -> None:
     """Скачивает и устанавливает языковую пару Firefox.
 
@@ -826,12 +864,17 @@ def _download_and_decompress(
 
         compressed = io.BytesIO()
         downloaded = 0
+        last_report = 0
         for chunk in response.iter_content(chunk_size=CHUNK_SIZE):
             if not chunk:
                 continue
             compressed.write(chunk)
             downloaded += len(chunk)
-            if progress_callback:
+            if progress_callback and (
+                downloaded - last_report >= 1024 * 1024
+                or (total_size and downloaded >= total_size)
+            ):
+                last_report = downloaded
                 progress_callback(downloaded, total_size, "Скачиваю модель...")
 
         payload = compressed.getvalue()

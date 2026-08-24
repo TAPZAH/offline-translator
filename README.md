@@ -1,8 +1,8 @@
 # Оффлайн Переводчик / Offline Translator
 
-Оффлайн-переводчик для Windows с тремя движками: Firefox Translations, Argos Translate и NLLB-200. Работает без интернета после установки языковых моделей. Версия **beta 0.97**.
+Оффлайн-переводчик для Windows с тремя движками: Firefox Translations, Argos Translate и NLLB-200. Работает без интернета после установки языковых моделей. Версия **beta 0.98**.
 
-Offline translator for Windows with Firefox Translations, Argos Translate and NLLB-200. Works without internet after language models are installed. Version **beta 0.97**.
+Offline translator for Windows with Firefox Translations, Argos Translate and NLLB-200. Works without internet after language models are installed. Version **beta 0.98**.
 
 ## Возможности
 
@@ -19,9 +19,9 @@ Offline translator for Windows with Firefox Translations, Argos Translate and NL
 
 | Файл | Что внутри |
 |------|------------|
-| `offline-translator-0.97-beta-setup.exe` | Установщик |
-| `offline-translator-0.97-beta-portable.zip` | Портативная папка, Python не нужен |
-| `offline-translator-0.97-beta-src.zip` | Исходники |
+| `offline-translator-0.98-beta-setup.exe` | Установщик |
+| `offline-translator-0.98-beta-portable.zip` | Портативная папка, Python не нужен |
+| `offline-translator-0.98-beta-src.zip` | Исходники |
 
 После распаковки портатива откройте `OfflineTranslator.exe`. Папки `_internal` и `data` удалять нельзя.
 

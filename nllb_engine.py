@@ -29,8 +29,12 @@ class NllbEngine(ThreadedEngine):
 
     def _worker_invalidate(self, state) -> None:
         """Сбрасывает загруженную модель после переустановки."""
+        translator = state.get("translator")
+        processor = state.get("sp")
         state["translator"] = None
         state["sp"] = None
+        del translator
+        del processor
         try:
             from nllb_packages import invalidate_cache
 

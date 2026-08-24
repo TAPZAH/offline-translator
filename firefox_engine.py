@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from language_packages import (
-    get_installed_pairs,
     get_model_architecture,
     is_package_installed,
     needed_pairs_for_path,
@@ -31,7 +30,9 @@ class FirefoxEngine(ThreadedEngine):
         return {}
 
     def _worker_invalidate(self, state) -> None:
-        """Сбрасывает загруженные Translator."""
+        """Сбрасывает загруженные Translator и отпускает нативную память."""
+        for key in list(state):
+            state[key] = None
         state.clear()
 
     def _worker_translate(
@@ -125,12 +126,3 @@ def get_engine() -> FirefoxEngine:
     if _engine is None:
         _engine = FirefoxEngine()
     return _engine
-
-
-def installed_language_codes() -> set[str]:
-    """Коды языков из установленных пакетов Firefox."""
-    codes: set[str] = set()
-    for from_code, to_code, _from_name, _to_name in get_installed_pairs():
-        codes.add(from_code)
-        codes.add(to_code)
-    return codes

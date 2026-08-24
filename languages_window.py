@@ -1,11 +1,13 @@
 import threading
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from app_settings import ENGINE_ARGOS, ENGINE_FIREFOX, ENGINE_NLLB, get_engine_name
 from language_detect import language_display_name
 from language_packages import (
     ARCHITECTURE_LABELS,
+    DEFAULT_ARCHITECTURE,
+    LanguagePackage,
     architecture_from_label,
     architecture_label,
     get_model_architecture,
@@ -16,7 +18,10 @@ from packages import (
     get_available_pairs,
     get_installed_architectures,
     get_installed_pairs,
+    has_incomplete_package,
     is_package_installed,
+    redownload_package,
+    uninstall_package,
     update_remote_index,
 )
 
@@ -31,8 +36,8 @@ class LanguagesWindow:
 
         self.window = tk.Toplevel(master)
         self.window.title("Языковые пакеты")
-        self.window.geometry("560x480")
-        self.window.minsize(520, 400)
+        self.window.geometry("640x500")
+        self.window.minsize(600, 440)
         self.window.transient(master)
 
         self._create_widgets()
@@ -45,23 +50,26 @@ class LanguagesWindow:
         if engine == ENGINE_FIREFOX:
             hint_text = (
                 "Нет прямой пары — программа переведёт через английский. "
-                "Для китайского нужен размер base."
+                "Для китайского нужен размер base. "
+                "Установленный пакет можно удалить или скачать заново."
             )
         elif engine == ENGINE_ARGOS:
             hint_text = (
-                "Пакеты Argos Translate. Нет прямой пары — перевод пойдёт через английский."
+                "Пакеты Argos Translate. Нет прямой пары — перевод пойдёт через английский. "
+                "Установленный пакет можно удалить или скачать заново."
             )
         elif engine == ENGINE_NLLB:
             hint_text = (
                 "NLLB-200 — одна модель на 200 языков. Скачайте пакет один раз, "
-                "после этого доступны все пары без отдельных языковых файлов."
+                "после этого доступны все пары. Повреждённую модель удалите "
+                "или скачайте заново."
             )
         else:
             hint_text = "Установите языковые пакеты текущего движка."
         hint = tk.Label(
             self.window,
             text=hint_text,
-            wraplength=540,
+            wraplength=600,
             justify=tk.LEFT,
         )
         hint.pack(fill=tk.X, padx=10, pady=(10, 4))
@@ -109,15 +117,28 @@ class LanguagesWindow:
         self.tree.configure(yscrollcommand=scrollbar.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh_action_buttons())
 
         button_frame = tk.Frame(self.window)
         button_frame.pack(fill=tk.X, padx=10, pady=4)
         self.install_button = tk.Button(
             button_frame,
-            text="Установить выбранный",
+            text="Установить",
             command=self._on_install_click,
         )
         self.install_button.pack(side=tk.LEFT)
+        self.redownload_button = tk.Button(
+            button_frame,
+            text="Перекачать",
+            command=self._on_redownload_click,
+        )
+        self.redownload_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.delete_button = tk.Button(
+            button_frame,
+            text="Удалить",
+            command=self._on_delete_click,
+        )
+        self.delete_button.pack(side=tk.LEFT, padx=(6, 0))
         tk.Button(button_frame, text="Закрыть", command=self.window.destroy).pack(
             side=tk.RIGHT
         )
@@ -128,6 +149,7 @@ class LanguagesWindow:
         tk.Label(self.window, textvariable=self.status_var, anchor=tk.W).pack(
             fill=tk.X, padx=10, pady=(0, 8)
         )
+        self._refresh_action_buttons()
 
     def _selected_architecture(self) -> str | None:
         """Размер модели Firefox или None для Argos."""
@@ -222,6 +244,8 @@ class LanguagesWindow:
         architecture = self._selected_architecture()
         if is_package_installed(from_code, to_code, architecture):
             return "Установлен"
+        if has_incomplete_package(from_code, to_code, architecture):
+            return "Повреждена"
         if architecture is None:
             return "Не установлен"
         others = [
@@ -285,6 +309,7 @@ class LanguagesWindow:
 
             if rows_added == 0:
                 self.tree.insert("", tk.END, values=("Нет пакетов", "", ""))
+            self._refresh_action_buttons()
         except Exception as error:
             self.status_var.set(f"Ошибка отображения списка: {error}")
 
@@ -304,61 +329,212 @@ class LanguagesWindow:
 
     def _on_install_click(self) -> None:
         """Запускает установку выбранного пакета."""
-        if self.is_busy:
+        language_package = self._selected_language_package()
+        if language_package is None:
             return
-        selection = self.tree.selection()
-        if not selection:
-            self.status_var.set("Выберите пакет в списке")
-            return
-        pair_id = selection[0]
-        if "->" not in pair_id:
-            self.status_var.set("Выберите пакет в списке")
-            return
-        from_code, to_code = pair_id.split("->", 1)
         architecture = self._selected_architecture()
-        if is_package_installed(from_code, to_code, architecture):
-            if from_code == "nllb":
-                label = "NLLB-200"
-            else:
-                label = architecture or "Argos"
-            self.status_var.set(f"Пакет {label} уже установлен")
+        if is_package_installed(
+            language_package.from_code,
+            language_package.to_code,
+            architecture,
+        ):
+            self.status_var.set("Пакет уже установлен. Чтобы заменить — «Перекачать».")
             return
-
-        language_package = next(
-            (
-                item
-                for item in self.available_packages
-                if item.from_code == from_code
-                and item.to_code == to_code
+        if get_engine_name() != ENGINE_NLLB:
+            matched = any(
+                item.from_code == language_package.from_code
+                and item.to_code == language_package.to_code
                 and (
                     architecture is None
                     or item.architecture == architecture
                 )
-            ),
-            None,
-        )
-        if language_package is None:
-            self.status_var.set("Пакет недоступен для скачивания (нет в каталоге)")
-            return
+                for item in self.available_packages
+            )
+            if not matched:
+                self.status_var.set("Пакет недоступен для скачивания (нет в каталоге)")
+                return
+        self._start_package_job("install", language_package)
 
-        self.is_busy = True
-        self.install_button.config(state=tk.DISABLED)
+    def _on_redownload_click(self) -> None:
+        """Удаляет выбранный пакет и скачивает его заново."""
+        language_package = self._selected_language_package()
+        if language_package is None:
+            return
+        if not self._can_remove(language_package):
+            self.status_var.set("Сначала установите пакет, либо выберите повреждённый")
+            return
+        if not self._confirm_action(
+            "Перекачать пакет",
+            self._confirm_message(language_package, redownload=True),
+        ):
+            return
+        self._start_package_job("redownload", language_package)
+
+    def _on_delete_click(self) -> None:
+        """Удаляет выбранный пакет с диска."""
+        language_package = self._selected_language_package()
+        if language_package is None:
+            return
+        if not self._can_remove(language_package):
+            self.status_var.set("Этот пакет не установлен")
+            return
+        if not self._confirm_action(
+            "Удалить пакет",
+            self._confirm_message(language_package, redownload=False),
+        ):
+            return
+        self._start_package_job("delete", language_package)
+
+    def _selected_pair(self) -> tuple[str, str] | None:
+        """Коды выбранной строки или None."""
+        if self.is_busy:
+            self.status_var.set("Дождитесь окончания текущей операции")
+            return None
+        selection = self.tree.selection()
+        if not selection:
+            self.status_var.set("Выберите пакет в списке")
+            return None
+        pair_id = selection[0]
+        if "->" not in pair_id:
+            self.status_var.set("Выберите пакет в списке")
+            return None
+        from_code, to_code = pair_id.split("->", 1)
+        return from_code, to_code
+
+    def _selected_language_package(self):
+        """Пакет выбранной строки, в том числе для NLLB целиком."""
+        pair = self._selected_pair()
+        if pair is None:
+            return None
+        from_code, to_code = pair
+        if get_engine_name() == ENGINE_NLLB:
+            return get_available_pairs()[0]
+        architecture = self._selected_architecture()
+        for item in self.available_packages:
+            if item.from_code != from_code or item.to_code != to_code:
+                continue
+            if architecture is None or item.architecture == architecture:
+                return item
+        return LanguagePackage(
+            from_code=from_code,
+            to_code=to_code,
+            from_name=language_display_name(from_code, from_code),
+            to_name=language_display_name(to_code, to_code),
+            dirname=f"{from_code}{to_code}",
+            architecture=architecture or DEFAULT_ARCHITECTURE,
+        )
+
+    def _can_remove(self, language_package) -> bool:
+        """Можно удалить или перекачать, если пакет стоит или повреждён."""
+        architecture = getattr(language_package, "architecture", None)
+        if architecture in {"argos", "nllb"}:
+            architecture = self._selected_architecture()
+        return is_package_installed(
+            language_package.from_code,
+            language_package.to_code,
+            architecture,
+        ) or has_incomplete_package(
+            language_package.from_code,
+            language_package.to_code,
+            architecture,
+        )
+
+    def _confirm_message(self, language_package, redownload: bool) -> str:
+        """Текст подтверждения удаления или перекачки."""
+        if get_engine_name() == ENGINE_NLLB:
+            if redownload:
+                return (
+                    "Скачать модель NLLB-200 заново? "
+                    "Текущие файлы будут удалены (~600 МБ)."
+                )
+            return "Удалить модель NLLB-200 целиком? Это одна модель на все языки."
+        from_name = language_display_name(
+            language_package.from_code, language_package.from_name
+        )
+        to_name = language_display_name(
+            language_package.to_code, language_package.to_name
+        )
+        pair = f"{from_name} → {to_name}"
+        if redownload:
+            return f"Скачать заново пакет {pair}? Текущие файлы будут удалены."
+        return f"Удалить пакет {pair} с диска?"
+
+    def _confirm_action(self, title: str, message: str) -> bool:
+        """Спрашивает подтверждение в модальном окне."""
+        try:
+            return bool(
+                messagebox.askyesno(title, message, parent=self.window)
+            )
+        except tk.TclError:
+            return False
+
+    def _refresh_action_buttons(self) -> None:
+        """Включает Удалить/Перекачать только для установленных пакетов."""
+        if self.is_busy:
+            return
+        try:
+            selection = self.tree.selection()
+            enabled = False
+            if selection and "->" in selection[0]:
+                from_code, to_code = selection[0].split("->", 1)
+                if get_engine_name() == ENGINE_NLLB:
+                    package = get_available_pairs()[0]
+                    enabled = self._can_remove(package)
+                else:
+                    architecture = self._selected_architecture()
+                    enabled = is_package_installed(
+                        from_code, to_code, architecture
+                    ) or has_incomplete_package(from_code, to_code, architecture)
+            state = tk.NORMAL if enabled else tk.DISABLED
+            self.redownload_button.config(state=state)
+            self.delete_button.config(state=state)
+        except Exception:
+            pass
+
+    def _set_busy(self, busy: bool) -> None:
+        """Блокирует кнопки на время скачивания или удаления."""
+        self.is_busy = busy
+        install_state = tk.DISABLED if busy else tk.NORMAL
+        self.install_button.config(state=install_state)
+        if busy:
+            self.redownload_button.config(state=tk.DISABLED)
+            self.delete_button.config(state=tk.DISABLED)
+        else:
+            self._refresh_action_buttons()
+
+    def _start_package_job(self, action: str, language_package) -> None:
+        """Запускает установку, перекачку или удаление в фоне."""
+        self._set_busy(True)
         self.progress["value"] = 0
         worker = threading.Thread(
-            target=self._install_package,
-            args=(language_package,),
+            target=self._run_package_job,
+            args=(action, language_package),
             daemon=True,
         )
         worker.start()
 
-    def _install_package(self, language_package) -> None:
-        """Скачивает пакет в фоне."""
+    def _run_package_job(self, action: str, language_package) -> None:
+        """Выполняет операцию с пакетом вне UI-потока."""
         try:
-            download_and_install(language_package, self._on_progress)
-            if self._window_alive():
-                self.window.after(0, lambda: self._on_install_done(None, language_package))
+            if action == "delete":
+                architecture = getattr(language_package, "architecture", None)
+                if architecture in {"argos", "nllb"}:
+                    architecture = None
+                uninstall_package(
+                    language_package.from_code,
+                    language_package.to_code,
+                    architecture,
+                )
+            elif action == "redownload":
+                redownload_package(language_package, self._on_progress)
             else:
-                # Окно закрыли во время загрузки — всё равно обновим главный экран
+                download_and_install(language_package, self._on_progress)
+            if self._window_alive():
+                self.window.after(
+                    0,
+                    lambda: self._on_job_done(None, language_package, action),
+                )
+            else:
                 try:
                     self.on_packages_changed()
                 except Exception:
@@ -367,8 +543,8 @@ class LanguagesWindow:
             if self._window_alive():
                 self.window.after(
                     0,
-                    lambda message=str(error): self._on_install_done(
-                        message, language_package
+                    lambda message=str(error): self._on_job_done(
+                        message, language_package, action
                     ),
                 )
 
@@ -392,19 +568,28 @@ class LanguagesWindow:
         except tk.TclError:
             pass
 
-    def _on_install_done(self, error_message: str | None, language_package) -> None:
-        """Завершает установку и обновляет главный экран."""
+    def _on_job_done(
+        self,
+        error_message: str | None,
+        language_package,
+        action: str,
+    ) -> None:
+        """Завершает установку, перекачку или удаление."""
         if not self._window_alive():
             try:
                 self.on_packages_changed()
             except Exception:
                 pass
             return
-        self.is_busy = False
-        self.install_button.config(state=tk.NORMAL)
+        self._set_busy(False)
         self.progress["value"] = 100 if error_message is None else 0
         if error_message:
-            self.status_var.set(f"Ошибка установки: {error_message}")
+            labels = {
+                "delete": "Ошибка удаления",
+                "redownload": "Ошибка перекачки",
+                "install": "Ошибка установки",
+            }
+            self.status_var.set(f"{labels.get(action, 'Ошибка')}: {error_message}")
             return
         from_name = language_display_name(
             language_package.from_code, language_package.from_name
@@ -412,13 +597,17 @@ class LanguagesWindow:
         to_name = language_display_name(
             language_package.to_code, language_package.to_name
         )
-        arch_label = language_package.architecture
-        if arch_label in {"argos", "nllb"}:
-            self.status_var.set(f"Установлено: {from_name} → {to_name}")
+        pair = f"{from_name} → {to_name}"
+        if action == "delete":
+            self.status_var.set(f"Удалено: {pair}")
+        elif action == "redownload":
+            self.status_var.set(f"Скачано заново: {pair}")
         else:
-            self.status_var.set(
-                f"Установлено: {from_name} → {to_name} ({arch_label})"
-            )
+            arch_label = language_package.architecture
+            if arch_label in {"argos", "nllb"}:
+                self.status_var.set(f"Установлено: {pair}")
+            else:
+                self.status_var.set(f"Установлено: {pair} ({arch_label})")
         self._fill_tree()
         try:
             self.on_packages_changed()

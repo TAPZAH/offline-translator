@@ -330,11 +330,22 @@ class SelectionPopup:
         self._hide_job = None
         self._capture_job = None
         self._shortcut_job = None
+        self._stopped = False
         self._ui_jobs: queue.Queue = queue.Queue()
         self._poll()
 
     def stop(self) -> None:
         """Останавливает опрос мыши и закрывает всплывающие окна."""
+        self._stopped = True
+        for job_name in ("_hide_job", "_capture_job", "_shortcut_job"):
+            job = getattr(self, job_name)
+            if job is None:
+                continue
+            try:
+                self.root.after_cancel(job)
+            except tk.TclError:
+                pass
+            setattr(self, job_name, None)
         try:
             self._hide_button()
             self._hide_result()
@@ -354,7 +365,8 @@ class SelectionPopup:
         """Загружает иконку выделения без фона для прозрачного окна."""
         if self._icon_photo is not None:
             return self._icon_photo
-        image = Image.open(SELECTION_ICON_PATH).convert("RGBA")
+        with Image.open(SELECTION_ICON_PATH) as opened:
+            image = opened.convert("RGBA")
         image = image.resize((ICON_SIZE, ICON_SIZE), Image.Resampling.LANCZOS)
         flattened = _flatten_icon_for_window(image)
         self._icon_photo = ImageTk.PhotoImage(flattened, master=self.root)
@@ -375,7 +387,7 @@ class SelectionPopup:
     def _poll(self) -> None:
         """Отслеживает выделение текста по перетаскиванию мыши."""
         try:
-            if not self.root.winfo_exists():
+            if self._stopped or not self.root.winfo_exists():
                 return
             self._drain_ui_jobs()
             self._poll_double_ctrl_c()
@@ -399,6 +411,8 @@ class SelectionPopup:
         except Exception:
             pass
         try:
+            if self._stopped:
+                return
             self.root.after(POLL_MS, self._poll)
         except tk.TclError:
             return
@@ -539,6 +553,9 @@ class SelectionPopup:
 
     def _capture_and_show(self, cursor_x: int, cursor_y: int) -> None:
         """Копирует выделение и показывает кнопку рядом с курсором."""
+        self._capture_job = None
+        if self._stopped:
+            return
         try:
             selected = capture_selected_text()
             if len(selected) < 2:
@@ -551,6 +568,8 @@ class SelectionPopup:
     def _translate_clipboard_selection(self) -> None:
         """Переводит текст, скопированный вторым нажатием Ctrl+C."""
         self._shortcut_job = None
+        if self._stopped:
+            return
         try:
             selected = (pyperclip.paste() or "").strip()
             if len(selected) < 2:
@@ -599,6 +618,8 @@ class SelectionPopup:
 
     def _on_translate_click(self) -> None:
         """Запускает перевод сохранённого выделения."""
+        if self._stopped:
+            return
         text = self._selected_text.strip()
         if not text or self._is_translating:
             return
@@ -613,11 +634,17 @@ class SelectionPopup:
     def _translate_in_background(self, text: str) -> None:
         """Выполняет перевод вне UI-потока."""
         try:
+            if self._stopped:
+                return
             translated, source_code, target_code = self.translate_func(text)
+            if self._stopped:
+                return
             self._ui_jobs.put(
                 lambda: self._show_result(translated, source_code, target_code)
             )
         except Exception as error:
+            if self._stopped:
+                return
             self._ui_jobs.put(lambda message=str(error): self._show_error(message))
 
     def _show_result(self, translated: str, source_code: str, target_code: str) -> None:
@@ -765,6 +792,12 @@ class SelectionPopup:
 
     def _hide_button(self) -> None:
         """Скрывает кнопку перевода."""
+        if self._hide_job is not None:
+            try:
+                self.root.after_cancel(self._hide_job)
+            except tk.TclError:
+                pass
+            self._hide_job = None
         if self._button_window is None:
             return
         try:

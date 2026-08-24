@@ -7,6 +7,7 @@ class ThreadedEngine:
 
     def __init__(self, thread_name: str) -> None:
         self._requests: queue.Queue = queue.Queue()
+        self._stopped = False
         self._thread = threading.Thread(
             target=self._run_worker,
             name=thread_name,
@@ -30,6 +31,18 @@ class ThreadedEngine:
         """Сбрасывает кэш моделей после установки пакетов."""
         self._call("invalidate")
 
+    def stop(self, timeout: float = 30) -> None:
+        """Останавливает рабочий поток и освобождает модели."""
+        if self._stopped:
+            return
+        self._stopped = True
+        reply: queue.Queue = queue.Queue(maxsize=1)
+        self._requests.put(("stop", (), reply))
+        try:
+            reply.get(timeout=timeout)
+        except queue.Empty:
+            pass
+
     def has_translation_path(self, source_code: str, target_code: str) -> bool:
         """Проверяет, есть ли прямой или двойной маршрут перевода."""
         return self.translation_route(source_code, target_code) is not None
@@ -40,6 +53,8 @@ class ThreadedEngine:
 
     def _call(self, action: str, *args):
         """Отправляет задачу в рабочий поток и ждёт ответ."""
+        if self._stopped:
+            raise RuntimeError("Движок остановлен")
         reply: queue.Queue = queue.Queue(maxsize=1)
         self._requests.put((action, args, reply))
         result = reply.get()
@@ -53,6 +68,12 @@ class ThreadedEngine:
         while True:
             action, args, reply = self._requests.get()
             try:
+                if action == "stop":
+                    self._worker_invalidate(state)
+                    if isinstance(state, dict):
+                        state.clear()
+                    reply.put(None)
+                    return
                 if action == "invalidate":
                     self._worker_invalidate(state)
                     reply.put(None)

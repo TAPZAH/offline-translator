@@ -1,0 +1,70 @@
+#pragma once
+
+#include <functional>
+#include <string>
+#include <string_view>
+
+namespace offline_translator {
+
+// Абстрактный буфер обмена: живой Win32 или подделка для тестов.
+class Clipboard {
+public:
+    virtual ~Clipboard() = default;
+    virtual std::wstring get_text() = 0;
+    virtual void set_text(std::wstring_view text) = 0;
+};
+
+class MemoryClipboard : public Clipboard {
+public:
+    std::wstring text;
+
+    std::wstring get_text() override {
+        return text;
+    }
+
+    void set_text(std::wstring_view value) override {
+        text.assign(value.begin(), value.end());
+    }
+};
+
+#ifdef _WIN32
+class Win32Clipboard : public Clipboard {
+public:
+    explicit Win32Clipboard(void* owner_hwnd = nullptr);
+    std::wstring get_text() override;
+    void set_text(std::wstring_view text) override;
+
+private:
+    void* owner_hwnd_;
+};
+#endif
+
+// Восстанавливает прежний текст буфера в деструкторе.
+class ClipboardRestorer {
+public:
+    explicit ClipboardRestorer(Clipboard& clipboard);
+    ~ClipboardRestorer();
+    ClipboardRestorer(const ClipboardRestorer&) = delete;
+    ClipboardRestorer& operator=(const ClipboardRestorer&) = delete;
+
+    const std::wstring& previous_text() const;
+
+private:
+    Clipboard& clipboard_;
+    std::wstring previous_;
+};
+
+// Копирует выделение через callback (в GUI — SendInput Ctrl+C), затем
+// всегда возвращает прежний буфер. Пустое выделение и совпадение с
+// сторожевой меткой считаются неудачей.
+std::wstring capture_selected_text(
+    Clipboard& clipboard,
+    const std::function<void()>& copy_selection,
+    std::wstring_view sentinel = L"__ot_sel_test__");
+
+#ifdef _WIN32
+void send_copy_keyboard_shortcut();
+std::wstring capture_selected_text_win32(void* owner_hwnd = nullptr);
+#endif
+
+}  // пространство имён offline_translator

@@ -11,3 +11,12 @@ release/*.exe
 venv/
 *.egg-info/
 .pytest_cache/
+
+# C++ portable / installer output (модели и DLL не в git)
+cpp/portable-win32/
+cpp/portable-win32-lite/
+cpp/portable-win32-full/
+cpp/installer-output/
+
+# Каталоги CMake/MSVC (воспроизводятся cmake --build)
+cpp/build-*/

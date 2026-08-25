@@ -98,6 +98,28 @@ void TranslationApplication::stop() {
     }
 }
 
+void TranslationApplication::uninstall_package(
+    std::string_view source_code,
+    std::string_view target_code) {
+    if (!state_) {
+        throw std::runtime_error("Приложение перевода не инициализировано");
+    }
+    invalidate();
+    if (state_->engine_kind == EngineKind::nllb) {
+        NllbModelManager(state_->models_root).uninstall();
+        return;
+    }
+    if (source_code.empty() || target_code.empty()) {
+        throw std::invalid_argument(
+            "Для удаления пакета Argos нужны коды языков");
+    }
+    ArgosModelManager(
+        state_->models_root,
+        std::string(source_code),
+        std::string(target_code))
+        .uninstall();
+}
+
 std::string TranslationApplication::engine_name(EngineKind engine_kind) {
     if (engine_kind == EngineKind::argos) {
         return "Argos";
@@ -106,6 +128,58 @@ std::string TranslationApplication::engine_name(EngineKind engine_kind) {
         return "NLLB";
     }
     throw std::invalid_argument("Неизвестный тип движка");
+}
+
+EngineKind TranslationApplication::engine_kind() const {
+    if (!state_) {
+        throw std::runtime_error("Приложение перевода не инициализировано");
+    }
+    return state_->engine_kind;
+}
+
+const std::filesystem::path& TranslationApplication::models_root() const {
+    if (!state_) {
+        throw std::runtime_error("Приложение перевода не инициализировано");
+    }
+    return state_->models_root;
+}
+
+TranslationApplication& TranslationSession::acquire(
+    EngineKind engine_kind,
+    const std::filesystem::path& models_root) {
+    if (application_ && engine_kind_ == engine_kind &&
+        models_root_ == models_root) {
+        return *application_;
+    }
+    application_.reset();
+    loaded_ = false;
+    application_ =
+        std::make_unique<TranslationApplication>(engine_kind, models_root);
+    engine_kind_ = engine_kind;
+    models_root_ = models_root;
+    return *application_;
+}
+
+void TranslationSession::reset() {
+    application_.reset();
+    loaded_ = false;
+    models_root_.clear();
+}
+
+TranslationApplication* TranslationSession::get() noexcept {
+    return application_.get();
+}
+
+const TranslationApplication* TranslationSession::get() const noexcept {
+    return application_.get();
+}
+
+bool TranslationSession::is_loaded() const noexcept {
+    return loaded_ && application_ != nullptr;
+}
+
+void TranslationSession::mark_loaded() noexcept {
+    loaded_ = application_ != nullptr;
 }
 
 }  // пространство имён offline_translator

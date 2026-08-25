@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "project": "Offline Translator: Python to C++ migration",
+  "scope": {
+    "platform": "Windows 10/11 x64",
+    "engines": [
+      "argos",
+      "nllb"
+    ],
+    "firefox_bergamot": "deferred"
+  },
+  "automation": {
+    "enabled": true,
+    "mode": "local-supervisor",
+    "max_followups": 8,
+    "require_independent_review": true,
+    "commit_each_accepted_stage": false,
+    "push_allowed": false
+  },
+  "canvas": {
+    "name": "cpp-migration-plan",
+    "path": "C:\\Users\\Gelezyaka\\.cursor\\projects\\c-work-offline-translator\\canvases\\cpp-migration-plan.canvas.tsx",
+    "update_after_review": true
+  },
+  "progress_percent": 85,
+  "current_stage": null,
+  "status": "blocked",
+  "updated_at": "2026-08-25T19:08:00.000Z",
+  "stages": [
+    {
+      "id": "foundation",
+      "status": "completed",
+      "accepted_commit": "23f0ac2"
+    },
+    {
+      "id": "runtime-stabilization",
+      "status": "completed",
+      "accepted_at": "2026-08-25T18:10:00.000Z"
+    },
+    {
+      "id": "model-management",
+      "status": "completed",
+      "accepted_at": "2026-08-25T18:20:00.000Z"
+    },
+    {
+      "id": "full-gui",
+      "status": "completed",
+      "accepted_at": "2026-08-25T18:35:00.000Z"
+    },
+    {
+      "id": "windows-integration",
+      "status": "completed",
+      "accepted_at": "2026-08-25T18:50:00.000Z"
+    },
+    {
+      "id": "distribution",
+      "status": "completed",
+      "accepted_at": "2026-08-25T19:05:00.000Z"
+    },
+    {
+      "id": "qa-parity",
+      "status": "completed",
+      "accepted_at": "2026-08-25T19:08:00.000Z",
+      "evidence": [
+        "Independent ctest cpp/build-ctranslate2 7/7 in 72.56s (integration_tests 66.20s, TIMEOUT 180)",
+        "Independent core-only ctest 3/3",
+        "portable_package_check passed",
+        "Known Python differences documented in cpp/packaging/PYTHON_DIFF.md"
+      ]
+    }
+  ],
+  "last_subagent": {
+    "status": "completed",
+    "type": "general-purpose",
+    "description": "QA parity and soak",
+    "summary": "integration_tests + PYTHON_DIFF independently verified; planned cycle complete.",
+    "completed_at": "2026-08-25T19:08:00.000Z"
+  },
+  "blockers": [
+    "C++ decode uses beam_size=1 and max_decoding_length=32; long text is truncated vs Python",
+    "C++ Argos greedy output can vary (Hello world → Адский мир on some runs)",
+    "Argos remote catalog is a stub (embedded en↔ru)",
+    "Selection UI is not pixel-perfect vs Python",
+    "Model-bundled portable (-IncludeModels) was not built",
+    "Firefox / Bergamot remains deferred",
+    "Не найден текущий этап null."
+  ]
+}

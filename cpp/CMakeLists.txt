@@ -75,6 +75,7 @@ add_library(offline_translator_core
     src/nllb_language.cpp
     src/nllb_engine.cpp
     src/selection.cpp
+    src/text_split.cpp
     src/translation_application.cpp
     src/route_planner.cpp
     src/translation_service.cpp

@@ -4,7 +4,14 @@
 #include "fs_utils.hpp"
 #include "zip_archive.hpp"
 
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
 #include <array>
+#include <fstream>
+#include <iterator>
+#include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -13,6 +20,9 @@ namespace offline_translator {
 namespace {
 
 constexpr std::string_view kDefaultPackageVersion = "1_9";
+constexpr std::string_view kDefaultIndexUrl =
+    "https://raw.githubusercontent.com/argosopentech/argospm-index/main/"
+    "index.json";
 constexpr std::array<std::string_view, 4> kRequiredFiles{
     "model/model.bin",
     "model/config.json",
@@ -36,6 +46,146 @@ const std::array<PackageInfo, 2> kEmbeddedCatalog{{
      "argos",
      "https://data.argosopentech.com/argospm/v1/translate-ru_en-1_9.argosmodel"},
 }};
+
+std::mutex& catalog_mutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::filesystem::path& cache_path_override() {
+    static std::filesystem::path path;
+    return path;
+}
+
+std::string& url_override() {
+    static std::string url;
+    return url;
+}
+
+bool is_http_url(std::string_view url) {
+    return url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0;
+}
+
+std::string default_remote_index_url() {
+    auto env = fs_utils::getenv_string("ARGOS_PACKAGE_INDEX");
+    if (env.empty()) {
+        return std::string(kDefaultIndexUrl);
+    }
+    constexpr std::string_view suffix = "index.json";
+    if (env.size() >= suffix.size() &&
+        env.compare(env.size() - suffix.size(), suffix.size(), suffix) == 0) {
+        return env;
+    }
+    if (env.back() != '/') {
+        env.push_back('/');
+    }
+    env.append(suffix);
+    return env;
+}
+
+std::filesystem::path default_index_cache_path() {
+    // Как Python settings.local_package_index: рядом с packages/, не внутри.
+    return ArgosModelManager::default_packages_root().parent_path() /
+           "index.json";
+}
+
+std::string version_dirname_suffix(std::string version) {
+    if (version.empty()) {
+        return std::string(kDefaultPackageVersion);
+    }
+    std::replace(version.begin(), version.end(), '.', '_');
+    return version;
+}
+
+std::string first_http_link(const nlohmann::json& item) {
+    if (!item.contains("links") || !item["links"].is_array()) {
+        return {};
+    }
+    for (const auto& link : item["links"]) {
+        if (!link.is_string()) {
+            continue;
+        }
+        auto url = link.get<std::string>();
+        if (is_http_url(url)) {
+            return url;
+        }
+    }
+    return {};
+}
+
+PackageInfo package_from_index_item(const nlohmann::json& item) {
+    const auto from_code = item.value("from_code", std::string());
+    const auto to_code = item.value("to_code", std::string());
+    auto code = item.value("code", std::string());
+    if (code.empty()) {
+        code = "translate-" + from_code + "_" + to_code;
+    }
+    const auto dirname =
+        code + "-" +
+        version_dirname_suffix(item.value("package_version", std::string()));
+    return PackageInfo{
+        from_code,
+        to_code,
+        item.value("from_name", from_code),
+        item.value("to_name", to_code),
+        dirname,
+        "argos",
+        first_http_link(item),
+    };
+}
+
+std::vector<PackageInfo> parse_argos_index(const std::string& text) {
+    const auto parsed = nlohmann::json::parse(text, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_array()) {
+        return {};
+    }
+    std::vector<PackageInfo> result;
+    for (const auto& item : parsed) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const auto type = item.value("type", std::string("translate"));
+        if (type != "translate") {
+            continue;
+        }
+        const auto from_code = item.value("from_code", std::string());
+        const auto to_code = item.value("to_code", std::string());
+        if (from_code.empty() || to_code.empty()) {
+            continue;
+        }
+        if (first_http_link(item).empty()) {
+            continue;
+        }
+        result.push_back(package_from_index_item(item));
+    }
+    return result;
+}
+
+std::string read_text_file(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return {};
+    }
+    return std::string(
+        std::istreambuf_iterator<char>(in),
+        std::istreambuf_iterator<char>());
+}
+
+std::vector<PackageInfo> load_catalog_from_cache(
+    const std::filesystem::path& cache_path) {
+    try {
+        if (!fs_utils::is_regular_file(cache_path)) {
+            return {};
+        }
+        return parse_argos_index(read_text_file(cache_path));
+    } catch (const std::exception&) {
+        return {};
+    }
+}
+
+std::vector<PackageInfo> embedded_catalog() {
+    return {kEmbeddedCatalog.begin(), kEmbeddedCatalog.end()};
+}
 
 bool parse_package_name(
     std::string_view name,
@@ -80,12 +230,82 @@ std::filesystem::path ArgosModelManager::default_packages_root() {
            "packages";
 }
 
+void ArgosModelManager::set_index_cache_path(std::filesystem::path path) {
+    std::lock_guard lock(catalog_mutex());
+    cache_path_override() = std::move(path);
+}
+
+void ArgosModelManager::set_index_url(std::string url) {
+    std::lock_guard lock(catalog_mutex());
+    url_override() = std::move(url);
+}
+
+std::filesystem::path ArgosModelManager::index_cache_path() {
+    std::lock_guard lock(catalog_mutex());
+    if (!cache_path_override().empty()) {
+        return cache_path_override();
+    }
+    return default_index_cache_path();
+}
+
+std::string ArgosModelManager::remote_index_url() {
+    std::lock_guard lock(catalog_mutex());
+    if (!url_override().empty()) {
+        return url_override();
+    }
+    return default_remote_index_url();
+}
+
 std::vector<PackageInfo> ArgosModelManager::available_packages() {
-    return {kEmbeddedCatalog.begin(), kEmbeddedCatalog.end()};
+    std::vector<PackageInfo> catalog;
+    {
+        std::lock_guard lock(catalog_mutex());
+        const auto cache = cache_path_override().empty()
+            ? default_index_cache_path()
+            : cache_path_override();
+        catalog = load_catalog_from_cache(cache);
+    }
+    if (catalog.empty()) {
+        return embedded_catalog();
+    }
+    return catalog;
 }
 
 void ArgosModelManager::update_remote_index() {
-    // Заглушка: полный индекс Argos не качаем на этом этапе миграции.
+    std::filesystem::path dest;
+    std::string url;
+    {
+        std::lock_guard lock(catalog_mutex());
+        dest = cache_path_override().empty() ? default_index_cache_path()
+                                             : cache_path_override();
+        url = url_override().empty() ? default_remote_index_url()
+                                     : url_override();
+    }
+    if (dest.empty() || url.empty()) {
+        return;
+    }
+    const auto staging = std::filesystem::path(
+        dest.native() + std::filesystem::path(".new").native());
+    try {
+        fs_utils::remove_tree(staging);
+        download_resumable({url}, staging, {}, "Обновляю индекс Argos");
+        const auto parsed = parse_argos_index(read_text_file(staging));
+        if (parsed.empty()) {
+            fs_utils::remove_tree(staging);
+            return;
+        }
+        std::lock_guard lock(catalog_mutex());
+        std::filesystem::create_directories(dest.parent_path());
+        if (std::filesystem::exists(dest)) {
+            std::filesystem::remove(dest);
+        }
+        std::filesystem::rename(staging, dest);
+    } catch (const std::exception&) {
+        try {
+            fs_utils::remove_tree(staging);
+        } catch (const std::exception&) {
+        }
+    }
 }
 
 std::string ArgosModelManager::package_prefix() const {
@@ -195,13 +415,13 @@ void ArgosModelManager::validate() const {
     }
 }
 
-const PackageInfo* ArgosModelManager::catalog_entry() const {
-    for (const auto& item : kEmbeddedCatalog) {
+std::optional<PackageInfo> ArgosModelManager::catalog_entry() const {
+    for (const auto& item : available_packages()) {
         if (item.from_code == source_code_ && item.to_code == target_code_) {
-            return &item;
+            return item;
         }
     }
-    return nullptr;
+    return std::nullopt;
 }
 
 void ArgosModelManager::set_package_url(std::string url) {
@@ -257,11 +477,11 @@ void ArgosModelManager::download_and_install(const ProgressCallback& progress) {
         return;
     }
 
-    const auto* catalog = catalog_entry();
+    const auto catalog = catalog_entry();
     std::string url = package_url_override_;
     std::string dirname =
         package_prefix() + std::string(kDefaultPackageVersion);
-    if (catalog != nullptr) {
+    if (catalog.has_value()) {
         if (url.empty()) {
             url = catalog->download_url;
         }
@@ -270,7 +490,7 @@ void ArgosModelManager::download_and_install(const ProgressCallback& progress) {
     if (url.empty()) {
         throw std::runtime_error(
             "Пакет Argos " + source_code_ + " → " + target_code_ +
-            " не найден во встроенном каталоге");
+            " не найден в каталоге");
     }
 
     std::filesystem::create_directories(downloads_path());
@@ -361,7 +581,7 @@ void ArgosModelManager::uninstall(const std::function<void()>& unload_models) {
         staging.parent_path() == downloads_path()) {
         fs_utils::remove_tree(staging);
     }
-    const auto* catalog = catalog_entry();
+    const auto catalog = catalog_entry();
     const std::string zip_stem =
         catalog ? catalog->dirname
                 : (package_prefix() + std::string(kDefaultPackageVersion));

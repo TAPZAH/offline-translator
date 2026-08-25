@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -19,9 +20,14 @@ public:
 
     static std::filesystem::path default_packages_root();
     static std::vector<PackageInfo> available_packages();
-    // Заглушка: удалённый индекс Argos пока не качаем, каталог — встроенные
-    // пары en↔ru, совпадающие с типичной установкой Python.
+    // Скачивает argospm-index в кэш на диске. Ошибка сети не бросается:
+    // available_packages() тогда читает старый кэш или встроенные en↔ru.
     static void update_remote_index();
+    static std::filesystem::path index_cache_path();
+    static std::string remote_index_url();
+    // Пустой путь или URL возвращает значения по умолчанию (как у Python).
+    static void set_index_cache_path(std::filesystem::path path);
+    static void set_index_url(std::string url);
     static std::vector<PackageInfo> installed_packages(
         const std::filesystem::path& packages_root);
 
@@ -45,7 +51,7 @@ private:
         const std::filesystem::path& root) const;
     std::filesystem::path staging_package_dir() const;
     std::string package_prefix() const;
-    const PackageInfo* catalog_entry() const;
+    std::optional<PackageInfo> catalog_entry() const;
     bool package_files_ready(const std::filesystem::path& package) const;
 
     std::filesystem::path packages_root_;

@@ -1,0 +1,73 @@
+[
+  {
+    "package_version": "1.9",
+    "argos_version": "1.9.0",
+    "from_code": "en",
+    "from_name": "English",
+    "to_code": "ru",
+    "to_name": "Russian",
+    "links": [
+      "https://argos-net.com/v1/translate-en_ru-1_9.argosmodel"
+    ],
+    "code": "translate-en_ru"
+  },
+  {
+    "package_version": "1.9",
+    "argos_version": "1.9.0",
+    "from_code": "ru",
+    "from_name": "Russian",
+    "to_code": "en",
+    "to_name": "English",
+    "links": [
+      "https://argos-net.com/v1/translate-ru_en-1_9.argosmodel"
+    ],
+    "code": "translate-ru_en"
+  },
+  {
+    "package_version": "1.3",
+    "argos_version": "1.3",
+    "from_code": "de",
+    "from_name": "German",
+    "to_code": "en",
+    "to_name": "English",
+    "links": [
+      "https://argos-net.com/v1/translate-de_en-1_3.argosmodel"
+    ],
+    "code": "translate-de_en"
+  },
+  {
+    "package_version": "1.5",
+    "argos_version": "1.5",
+    "from_code": "fr",
+    "from_name": "French",
+    "to_code": "en",
+    "to_name": "English",
+    "links": [
+      "https://argos-net.com/v1/translate-fr_en-1_5.argosmodel",
+      "ipfs://QmFixtureOnly"
+    ],
+    "code": "translate-fr_en"
+  },
+  {
+    "type": "sbd",
+    "from_code": "en",
+    "from_name": "English",
+    "to_code": "en",
+    "to_name": "English",
+    "links": [
+      "https://example.invalid/sbd-en.argosmodel"
+    ],
+    "code": "sbd-en"
+  },
+  {
+    "package_version": "1.0",
+    "from_code": "xx",
+    "from_name": "Unused",
+    "to_code": "yy",
+    "to_name": "Unused",
+    "links": [
+      "ipfs://QmNoHttpLink"
+    ],
+    "code": "translate-xx_yy"
+  }
+]

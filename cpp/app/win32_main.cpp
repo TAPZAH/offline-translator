@@ -37,6 +37,7 @@ constexpr UINT kTranslateMessage = WM_APP + 1;
 constexpr UINT kStatusMessage = WM_APP + 2;
 constexpr UINT kPackageProgressMessage = WM_APP + 3;
 constexpr UINT kPackageDoneMessage = WM_APP + 4;
+constexpr UINT kPackageIndexMessage = WM_APP + 5;
 constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kSelectionResultMessage = WM_APP + 11;
 constexpr UINT kSelectionPollTimer = 1;
@@ -2046,6 +2047,30 @@ LRESULT CALLBACK packages_proc(
                 nullptr,
                 nullptr);
             refresh_package_list();
+            std::thread([window]() {
+                offline_translator::ArgosModelManager::update_remote_index();
+                post_payload(
+                    window,
+                    kPackageIndexMessage,
+                    L"Каталог Argos обновлён",
+                    false);
+            }).detach();
+            return 0;
+        }
+        if (message == kPackageIndexMessage) {
+            std::unique_ptr<StatusPayload> payload(
+                reinterpret_cast<StatusPayload*>(l_param));
+            if (!g_runtime || g_runtime->packages_busy) {
+                return 0;
+            }
+            refresh_package_list();
+            if (g_package_status) {
+                const std::wstring text =
+                    L"Пакетов в списке: " +
+                    std::to_wstring(g_runtime->package_rows.size());
+                SetWindowTextW(g_package_status, text.c_str());
+            }
+            static_cast<void>(payload);
             return 0;
         }
         if (message == WM_COMMAND) {

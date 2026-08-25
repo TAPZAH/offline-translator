@@ -2,12 +2,15 @@
 
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/route_planner.hpp"
+#include "offline_translator/text_split.hpp"
 
 #include <ctranslate2/translator.h>
 
 #include <algorithm>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace offline_translator {
 
@@ -17,9 +20,9 @@ public:
         : translator(
               model_path,
               ctranslate2::Device::CPU,
-              nllb_model
-                  ? ctranslate2::ComputeType::FLOAT32
-                  : ctranslate2::ComputeType::AUTO) {}
+              ctranslate2::ComputeType::AUTO) {
+        static_cast<void>(nllb_model);
+    }
 
     ctranslate2::Translator translator;
 };
@@ -102,50 +105,90 @@ std::string CTranslate2Engine::translate_direct(
     std::string_view target_code) {
     ensure_loaded();
 
-    auto tokens = tokenize_(text);
-    if (tokens.empty()) {
-        throw std::runtime_error("Токенизатор вернул пустой результат");
-    }
-
     const std::string nllb_source =
         nllb_model_ ? nllb_language_code(source_code) : std::string(source_code);
     const std::string nllb_target =
         nllb_model_ ? nllb_language_code(target_code) : std::string(target_code);
-    std::vector<std::string> target_prefix;
-    if (nllb_model_) {
-        tokens.insert(tokens.begin(), nllb_source);
-        tokens.emplace_back("</s>");
-        target_prefix.emplace_back(nllb_target);
-    }
 
-    ctranslate2::TranslationOptions options;
-    options.beam_size = 1;
-    options.max_decoding_length = 32;
-    options.replace_unknowns = true;
-    const auto results = state_->translator.translate_batch(
-        {tokens},
-        target_prefix.empty()
-            ? std::vector<std::vector<std::string>>{}
-            : std::vector<std::vector<std::string>>{target_prefix},
-        options);
-    if (results.empty() || results.front().hypotheses.empty()) {
-        throw std::runtime_error("CTranslate2 вернул пустой результат");
-    }
-
-    auto hypothesis = results.front().hypotheses.front();
+    std::vector<std::string> pieces;
     if (nllb_model_) {
-        hypothesis.erase(
-            std::remove(
-                hypothesis.begin(),
-                hypothesis.end(),
-                nllb_target),
-            hypothesis.end());
-        while (!hypothesis.empty() &&
-               (hypothesis.back() == "</s>" || hypothesis.back() == "<s>")) {
-            hypothesis.pop_back();
+        pieces.emplace_back(std::string(text));
+    } else {
+        pieces = split_sentences(text);
+        if (pieces.empty()) {
+            pieces.emplace_back(std::string(text));
         }
     }
-    const std::string translated = detokenize_(hypothesis);
+
+    std::vector<std::vector<std::string>> batch;
+    std::vector<std::vector<std::string>> prefixes;
+    batch.reserve(pieces.size());
+    for (const auto& piece : pieces) {
+        auto tokens = tokenize_(piece);
+        if (tokens.empty()) {
+            continue;
+        }
+        if (nllb_model_) {
+            tokens.insert(tokens.begin(), nllb_source);
+            tokens.emplace_back("</s>");
+            prefixes.push_back({nllb_target});
+        }
+        batch.push_back(std::move(tokens));
+    }
+    if (batch.empty()) {
+        throw std::runtime_error("Токенизатор вернул пустой результат");
+    }
+
+    // Как в Python: Argos beam_size=2; NLLB beam_size=2 и max_decoding_length=512.
+    ctranslate2::TranslationOptions options;
+    options.beam_size = 2;
+    options.replace_unknowns = true;
+    if (nllb_model_) {
+        options.max_decoding_length = 512;
+    }
+    const auto results = state_->translator.translate_batch(
+        batch,
+        prefixes.empty() ? std::vector<std::vector<std::string>>{} : prefixes,
+        options);
+    if (results.size() != batch.size()) {
+        throw std::runtime_error("CTranslate2 вернул неожиданное число гипотез");
+    }
+
+    std::vector<std::string> parts;
+    parts.reserve(results.size());
+    for (const auto& result : results) {
+        if (result.hypotheses.empty()) {
+            throw std::runtime_error("CTranslate2 вернул пустой результат");
+        }
+        auto hypothesis = result.hypotheses.front();
+        if (nllb_model_) {
+            hypothesis.erase(
+                std::remove(
+                    hypothesis.begin(),
+                    hypothesis.end(),
+                    nllb_target),
+                hypothesis.end());
+            while (!hypothesis.empty() &&
+                   (hypothesis.back() == "</s>" || hypothesis.back() == "<s>")) {
+                hypothesis.pop_back();
+            }
+        }
+        auto decoded = detokenize_(hypothesis);
+        while (!decoded.empty() &&
+               (decoded.back() == ' ' || decoded.back() == '\n')) {
+            decoded.pop_back();
+        }
+        if (!decoded.empty()) {
+            parts.push_back(std::move(decoded));
+        }
+    }
+    std::string translated;
+    for (std::size_t index = 0; index < parts.size(); ++index) {
+        if (index > 0) {
+            translated.push_back(' ');
+        }
+        translated += parts[index];
+    }
     if (translated.empty()) {
         throw std::runtime_error("Детокенизатор вернул пустой результат");
     }

@@ -9,10 +9,13 @@
   `ENGINE_FIREFOX` ещё есть, но `app_settings.ENGINES` уже только
   `argos` / `nllb`; `translation_engine.get_engine()` Firefox не создаёт.
   В C++ движка Firefox нет (нет fxtranslate / Bergamot).
-- **Argos: каталог — заглушка.** Python читает индекс `argostranslate.package`
-  и список установленных пакетов. C++ `ArgosModelManager::available_packages()`
-  возвращает встроенные `en↔ru`; `update_remote_index()` пустой. Установленные
-  пары на диске (`translate-<from>_<to>-<версия>/`) находятся по шаблону,
+- **Argos: удалённый индекс.** Python читает `argostranslate.package`
+  (`update_package_index` → `get_available_packages`). C++
+  `ArgosModelManager::available_packages()` разбирает тот же JSON
+  `argospm-index` из кэша `%USERPROFILE%\.local\share\argos-translate\index.json`;
+  `update_remote_index()` качает индекс через WinHTTP. Нет кэша, сеть
+  недоступна или JSON битый — встроенные `en↔ru`. Установленные пары на
+  диске (`translate-<from>_<to>-<версия>/`) находятся по шаблону,
   даже если версии не `1_9`.
 - **NLLB: один пакет.** И Python, и C++ ждут
   `nllb-200-distilled-600M` в `%USERPROFILE%\.local\share\offline-translator\nllb-200`
@@ -21,12 +24,11 @@
 - **Параметры CTranslate2 не совпадают**, поэтому формулировки перевода
   могут отличаться, и это не регресс сам по себе:
   - Python Argos: `beam_size=2`, резка на предложения (`_split_sentences`).
-  - Python NLLB: `beam_size=2`, `max_decoding_length=512`.
-  - C++ (`ctranslate2_engine.cpp`): `beam_size=1`, `max_decoding_length=32`,
-    без нарезки на предложения. Длинный текст не падает, но выход
-    обрезается по 32 токенам.
-  - C++ NLLB грузит модель как `ComputeType::FLOAT32`; Argos — `AUTO`.
-    Python везде `compute_type="auto"`.
+  - Python NLLB: `beam_size=2`, `max_decoding_length=512`, `compute_type="int8"`.
+  - C++: `beam_size=2`; NLLB `max_decoding_length=512`. `ComputeType::AUTO`
+    (INT8 на этой OpenBLAS-сборке CTranslate2 недоступен:
+    «target device or backend do not support efficient int8 computation»).
+    Argos режет предложения как Python и переводит пакетом.
 
 ## GUI и выделение
 
@@ -38,8 +40,9 @@
   double Ctrl+C 0.7 с) совпадают по константам с Python.
 - Комбо языков C++ показывает **56 ISO-кодов NLLB** для обоих движков.
   Для Argos это не значит, что пакет скачан: нужна локальная пара, иначе
-  перевод падает с ошибкой маршрута. Python в «Языках» показывает
-  доступные/установленные пакеты текущего движка.
+  перевод падает с ошибкой маршрута. Окно «Пакеты» C++ перечисляет пары
+  из кэша `argospm-index` (как Python `get_available_packages`) плюс
+  установленные. Python в «Языках» ещё даёт поиск по каталогу Firefox.
 - `language_display_name` в C++ — короткий словарь; в Python —
   `LANGUAGE_NAMES` на десятки языков.
 
@@ -91,12 +94,10 @@
 ## Что C++ не повторяет
 
 - Полноценный попап выделения Python (иконка, стили overlay).
-- Удалённый индекс пакетов Argos и установка произвольных пар из UI
-  сверх встроенных en↔ru (поставить можно, если zip/URL задать вручную
-  в менеджере).
 - Firefox / Bergamot.
 - `langdetect`.
-- Нарезка предложений Argos и длинный NLLB-выход (512 токенов).
+- Нарезка предложений Argos в C++ совпадает по правилам с Python.
+  Длинный NLLB-выход ограничен 512 токенами, как в Python.
 
 ## Наблюдения qa-parity (`Hello world` en→ru)
 

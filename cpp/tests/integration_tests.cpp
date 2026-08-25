@@ -239,11 +239,10 @@ void test_real_engines() {
         require(!last.empty(), "первый повторный Argos не пустой");
         std::cout << "argos repeat: " << last << "\n";
 
-        std::string long_text;
-        long_text.reserve(3500);
-        while (long_text.size() < 3000) {
-            long_text += "Hello world. ";
-        }
+        const std::string long_text =
+            "Hello world. This is a second sentence. "
+            "The third sentence is longer than the first. "
+            "Fourth sentence keeps going. Fifth sentence ends here.";
         const auto long_result = timed_translate(
             argos,
             long_text,
@@ -254,6 +253,9 @@ void test_real_engines() {
         require(
             !long_result.text.empty(),
             "длинный текст Argos не пустой и не падает");
+        require(
+            long_result.text.size() > 40,
+            "длинный текст Argos не обрезан до одного короткого фрагмента");
         std::cout << "argos long bytes in=" << long_text.size()
                   << " out=" << long_result.text.size() << "\n";
 
@@ -300,10 +302,9 @@ void test_real_engines() {
         require(!ru_en.text.empty(), "NLLB ru→en не пустой");
         std::cout << "nllb ru->en: " << ru_en.text << "\n";
         if (!argos_en_ru) {
-            std::string long_text;
-            while (long_text.size() < 3000) {
-                long_text += "Hello world. ";
-            }
+            const std::string long_text =
+                "Hello world. This is a second sentence. "
+                "The third sentence is longer than the first.";
             const auto long_result = timed_translate(
                 nllb,
                 long_text,
@@ -314,8 +315,9 @@ void test_real_engines() {
             require(
                 !long_result.text.empty(),
                 "длинный текст NLLB не пустой и не падает");
-            std::cout << "nllb long bytes in=" << long_text.size()
-                      << " out=" << long_result.text.size() << "\n";
+            require(
+                long_result.text.size() > 20,
+                "длинный текст NLLB не обрезан 32 токенами");
         }
     } else {
         std::cout << "skip nllb: модель не установлена\n";

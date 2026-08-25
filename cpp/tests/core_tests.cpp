@@ -6,6 +6,7 @@
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/selection.hpp"
+#include "offline_translator/text_split.hpp"
 #include "offline_translator/translation_service.hpp"
 #include "offline_translator/window_policy.hpp"
 #include "file_transfer.hpp"
@@ -59,6 +60,100 @@ void require(bool ok, const std::string& message) {
     }
 }
 
+constexpr std::string_view kArgosIndexFixtureJson = R"JSON(
+[
+  {
+    "package_version": "1.9",
+    "argos_version": "1.9.0",
+    "from_code": "en",
+    "from_name": "English",
+    "to_code": "ru",
+    "to_name": "Russian",
+    "links": ["https://argos-net.com/v1/translate-en_ru-1_9.argosmodel"],
+    "code": "translate-en_ru"
+  },
+  {
+    "package_version": "1.9",
+    "argos_version": "1.9.0",
+    "from_code": "ru",
+    "from_name": "Russian",
+    "to_code": "en",
+    "to_name": "English",
+    "links": ["https://argos-net.com/v1/translate-ru_en-1_9.argosmodel"],
+    "code": "translate-ru_en"
+  },
+  {
+    "package_version": "1.3",
+    "argos_version": "1.3",
+    "from_code": "de",
+    "from_name": "German",
+    "to_code": "en",
+    "to_name": "English",
+    "links": ["https://argos-net.com/v1/translate-de_en-1_3.argosmodel"],
+    "code": "translate-de_en"
+  },
+  {
+    "package_version": "1.5",
+    "argos_version": "1.5",
+    "from_code": "fr",
+    "from_name": "French",
+    "to_code": "en",
+    "to_name": "English",
+    "links": [
+      "https://argos-net.com/v1/translate-fr_en-1_5.argosmodel",
+      "ipfs://QmFixtureOnly"
+    ],
+    "code": "translate-fr_en"
+  },
+  {
+    "type": "sbd",
+    "from_code": "en",
+    "from_name": "English",
+    "to_code": "en",
+    "to_name": "English",
+    "links": ["https://example.invalid/sbd-en.argosmodel"],
+    "code": "sbd-en"
+  },
+  {
+    "package_version": "1.0",
+    "from_code": "xx",
+    "from_name": "Unused",
+    "to_code": "yy",
+    "to_name": "Unused",
+    "links": ["ipfs://QmNoHttpLink"],
+    "code": "translate-xx_yy"
+  }
+]
+)JSON";
+
+bool catalog_has_pair(
+    const std::vector<PackageInfo>& catalog,
+    std::string_view from_code,
+    std::string_view to_code) {
+    for (const auto& item : catalog) {
+        if (item.from_code == from_code && item.to_code == to_code) {
+            return true;
+        }
+    }
+    return false;
+}
+
+class ArgosIndexGuard {
+public:
+    explicit ArgosIndexGuard(
+        std::filesystem::path cache_path,
+        std::string url = {}) {
+        ArgosModelManager::set_index_cache_path(std::move(cache_path));
+        ArgosModelManager::set_index_url(std::move(url));
+    }
+    ~ArgosIndexGuard() {
+        ArgosModelManager::set_index_cache_path({});
+        ArgosModelManager::set_index_url({});
+    }
+    ArgosIndexGuard(const ArgosIndexGuard&) = delete;
+    ArgosIndexGuard& operator=(const ArgosIndexGuard&) = delete;
+};
+
 }  // анонимное пространство имён
 
 using namespace offline_translator;
@@ -86,6 +181,21 @@ int main() {
         unknown_language_thrown = true;
     }
     assert(unknown_language_thrown);
+
+    {
+        require(split_sentences("").empty(), "пустой текст без предложений");
+        const auto one = split_sentences("Hello world");
+        require(one.size() == 1 && one[0] == "Hello world", "одно предложение без точки");
+        const auto two = split_sentences("Hello. World.");
+        require(two.size() == 2, "два предложения по точке");
+        require(two[0] == "Hello." && two[1] == "World.", "границы предложений");
+        const auto lines = split_sentences("A\n\nB");
+        require(lines.size() == 2 && lines[0] == "A" && lines[1] == "B", "разрез по переводам строк");
+        const auto ellipsis = split_sentences("Ждём… Потом.");
+        require(
+            ellipsis.size() == 2 && ellipsis[0] == "Ждём…" && ellipsis[1] == "Потом.",
+            "разрез после многоточия");
+    }
 
     const std::set<LanguagePair> installed{
         {"ru", "en"},
@@ -254,6 +364,15 @@ int main() {
     const auto argos_mgmt_root =
         std::filesystem::temp_directory_path() / "offline-translator-argos-mgmt";
     std::filesystem::remove_all(argos_mgmt_root);
+    const auto argos_index_root =
+        std::filesystem::temp_directory_path() / "offline-translator-argos-index";
+    std::filesystem::remove_all(argos_index_root);
+    std::filesystem::create_directories(argos_index_root);
+    const auto isolated_index = argos_index_root / "index.json";
+    const auto missing_index_source = argos_index_root / "missing-source.json";
+    const auto fixture_path = argos_index_root / "argospm_index.json";
+    fs_utils::write_text_file(fixture_path, kArgosIndexFixtureJson);
+    ArgosIndexGuard argos_index_guard(isolated_index, missing_index_source.string());
     {
         ArgosModelManager missing(argos_mgmt_root, "en", "ru");
         require(!missing.is_installed(), "пустой корень Argos не установлен");
@@ -262,8 +381,79 @@ int main() {
             "пустой корень Argos без обломков");
         require(
             ArgosModelManager::available_packages().size() == 2,
-            "встроенный каталог Argos en↔ru");
+            "нет кэша → встроенный каталог Argos en↔ru");
         ArgosModelManager::update_remote_index();
+        require(
+            ArgosModelManager::available_packages().size() == 2,
+            "неудачное обновление индекса не роняет каталог");
+        require(
+            !std::filesystem::exists(isolated_index),
+            "при ошибке загрузки кэш индекса не создаётся");
+    }
+    {
+        std::filesystem::copy_file(
+            fixture_path,
+            isolated_index,
+            std::filesystem::copy_options::overwrite_existing);
+        const auto catalog = ArgosModelManager::available_packages();
+        require(
+            catalog.size() > 2,
+            "фикстура индекса Argos даёт больше двух пар");
+        require(catalog_has_pair(catalog, "en", "ru"), "фикстура содержит en→ru");
+        require(catalog_has_pair(catalog, "de", "en"), "фикстура содержит de→en");
+        require(catalog_has_pair(catalog, "fr", "en"), "фикстура содержит fr→en");
+        require(
+            !catalog_has_pair(catalog, "xx", "yy"),
+            "пакет только с ipfs:// не попадает в каталог");
+        bool de_en_has_url = false;
+        for (const auto& item : catalog) {
+            if (item.from_code == "de" && item.to_code == "en") {
+                de_en_has_url = !item.download_url.empty() &&
+                    item.dirname.find("translate-de_en") == 0;
+            }
+        }
+        require(de_en_has_url, "у de→en есть URL и dirname пакета");
+        static_cast<void>(
+            ArgosModelManager(argos_mgmt_root, "de", "en").has_incomplete_package());
+    }
+    {
+        fs_utils::write_text_file(isolated_index, "{это не индекс Argos");
+        const auto catalog = ArgosModelManager::available_packages();
+        require(
+            catalog.size() == 2,
+            "битый индекс → встроенные en↔ru");
+        require(catalog_has_pair(catalog, "en", "ru"), "fallback en→ru");
+        require(catalog_has_pair(catalog, "ru", "en"), "fallback ru→en");
+    }
+    {
+        std::filesystem::remove(isolated_index);
+        ArgosModelManager::set_index_url(fixture_path.string());
+        ArgosModelManager::update_remote_index();
+        require(
+            std::filesystem::is_regular_file(
+                ArgosModelManager::index_cache_path()),
+            "update_remote_index пишет кэш из локального файла");
+        const auto catalog = ArgosModelManager::available_packages();
+        require(
+            catalog.size() > 2,
+            "кэш после update_remote_index читается как каталог");
+        require(catalog_has_pair(catalog, "de", "en"), "кэш содержит de→en");
+        ArgosModelManager::set_index_url(missing_index_source.string());
+    }
+    {
+        const auto live_cache = argos_index_root / "live-index.json";
+        ArgosModelManager::set_index_cache_path(live_cache);
+        ArgosModelManager::set_index_url({});
+        ArgosModelManager::update_remote_index();
+        const auto live = ArgosModelManager::available_packages();
+        if (live.size() > 2 && std::filesystem::is_regular_file(live_cache)) {
+            std::cout << "live argos index: " << live.size() << " packages\n";
+        } else {
+            std::cout << "skip live argos index: сеть недоступна, fallback\n";
+        }
+        ArgosModelManager::set_index_cache_path(isolated_index);
+        ArgosModelManager::set_index_url(missing_index_source.string());
+        std::filesystem::remove(isolated_index);
     }
     {
         ArgosModelManager incomplete(argos_mgmt_root, "en", "ru");
@@ -642,6 +832,7 @@ int main() {
 
     std::filesystem::remove_all(nllb_root);
     std::filesystem::remove_all(argos_mgmt_root);
+    std::filesystem::remove_all(argos_index_root);
 
     std::cout << "core_tests: ok\n";
     return 0;

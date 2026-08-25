@@ -5,7 +5,6 @@ from autostart import is_autostart_enabled, set_autostart
 from app_logging import get_logger, log_exception
 from app_settings import (
     ENGINE_ARGOS,
-    ENGINE_FIREFOX,
     ENGINE_NLLB,
     ENGINE_LABELS,
     RESULT_WINDOW_CLICK_TO_CLOSE,
@@ -14,25 +13,18 @@ from app_settings import (
     engine_label,
     get_double_ctrl_c_translation,
     get_engine_name,
-    get_firefox_architecture,
     get_popup_requires_ctrl,
     get_result_window_mode,
     set_double_ctrl_c_translation,
     set_engine_name,
-    set_firefox_architecture,
     set_popup_requires_ctrl,
     set_result_window_mode,
-)
-from language_packages import (
-    ARCHITECTURE_LABELS,
-    architecture_from_label,
-    architecture_label,
 )
 from selection_button import TRAY_ICON_PATH
 
 
 class SettingsWindow:
-    """Окно выбора движка перевода и размера Firefox."""
+    """Окно выбора движка перевода и поведения приложения."""
 
     def __init__(self, master: tk.Misc, on_settings_changed) -> None:
         self.on_settings_changed = on_settings_changed
@@ -58,10 +50,10 @@ class SettingsWindow:
             self._window_icon = None
 
     def _create_widgets(self) -> None:
-        """Создаёт выбор движка и размера модели."""
+        """Создаёт выбор движка и параметры приложения."""
         hint = tk.Label(
             self.window,
-            text="Firefox — лёгкие модели Mozilla. Argos — пакеты CTranslate2 по парам языков. NLLB-200 — одна модель Meta на 200 языков, качество выше на редких языках.",
+            text="Argos — пакеты CTranslate2 по парам языков. NLLB-200 — одна модель Meta на 200 языков, качество выше на редких языках.",
             wraplength=380,
             justify=tk.LEFT,
         )
@@ -80,21 +72,6 @@ class SettingsWindow:
         )
         self.engine_combo.pack(side=tk.LEFT, padx=(8, 0))
         self.engine_combo.bind("<<ComboboxSelected>>", self._on_engine_changed)
-
-        size_frame = tk.Frame(self.window)
-        size_frame.pack(fill=tk.X, padx=12, pady=4)
-        tk.Label(size_frame, text="Firefox:").pack(side=tk.LEFT)
-        self.size_var = tk.StringVar(
-            value=architecture_label(get_firefox_architecture())
-        )
-        self.size_combo = ttk.Combobox(
-            size_frame,
-            textvariable=self.size_var,
-            values=list(ARCHITECTURE_LABELS.values()),
-            state="readonly",
-            width=28,
-        )
-        self.size_combo.pack(side=tk.LEFT, padx=(8, 0))
 
         selection_frame = tk.LabelFrame(
             self.window,
@@ -183,26 +160,14 @@ class SettingsWindow:
         tk.Button(buttons, text="Отмена", command=self.window.destroy).pack(
             side=tk.RIGHT
         )
-        self._refresh_size_state()
-
     def _on_engine_changed(self, _event=None) -> None:
-        """Включает размер Firefox только для движка Mozilla."""
-        self._refresh_size_state()
-
-    def _refresh_size_state(self) -> None:
-        """Размер tiny/base нужен только Firefox."""
+        """Обновляет пояснение для выбранного движка."""
         engine = engine_from_label(self.engine_var.get())
-        if engine == ENGINE_FIREFOX:
-            self.size_combo.config(state="readonly")
-            self.status_var.set("Для китайского и части языков нужен размер base.")
-        elif engine == ENGINE_ARGOS:
-            self.size_combo.config(state="disabled")
+        if engine == ENGINE_ARGOS:
             self.status_var.set("Argos использует свои пакеты .argosmodel.")
         elif engine == ENGINE_NLLB:
-            self.size_combo.config(state="disabled")
             self.status_var.set("NLLB ставится одним пакетом в «Языки» (~600 МБ).")
         else:
-            self.size_combo.config(state="disabled")
             self.status_var.set("")
 
     def _on_save(self) -> None:
@@ -210,8 +175,6 @@ class SettingsWindow:
         try:
             engine = engine_from_label(self.engine_var.get())
             set_engine_name(engine)
-            if engine == ENGINE_FIREFOX:
-                set_firefox_architecture(architecture_from_label(self.size_var.get()))
             set_popup_requires_ctrl(self.popup_requires_ctrl_var.get())
             set_double_ctrl_c_translation(self.double_ctrl_c_var.get())
             set_result_window_mode(self.result_window_mode_var.get())

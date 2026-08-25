@@ -1,4 +1,4 @@
-from app_settings import ENGINE_ARGOS, ENGINE_NLLB, get_engine_name
+from app_settings import ENGINE_ARGOS, ENGINE_NLLB, ENGINES, get_engine_name
 from app_logging import flush_logs, get_logger, log_exception
 
 
@@ -16,9 +16,9 @@ def get_engine():
             from nllb_engine import get_engine as get_nllb_engine
 
             return get_nllb_engine()
-        from firefox_engine import get_engine as get_firefox_engine
-
-        return get_firefox_engine()
+        raise RuntimeError(
+            f"Движок {engine!r} отключён. Доступны: {', '.join(ENGINES)}"
+        )
     except Exception as error:
         log_exception(f"Не удалось создать движок {engine}", error)
         raise

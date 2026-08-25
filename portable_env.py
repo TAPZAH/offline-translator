@@ -40,10 +40,6 @@ def apply() -> None:
         data_home,
     )
     os.environ.setdefault(
-        "OFFLINE_TRANSLATOR_MODELS",
-        os.path.join(data_home, "firefox-models"),
-    )
-    os.environ.setdefault(
         "ARGOS_PACKAGES_DIR",
         os.path.join(data_home, "argos-packages"),
     )

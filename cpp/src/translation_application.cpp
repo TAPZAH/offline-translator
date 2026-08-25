@@ -1,0 +1,111 @@
+#include "offline_translator/translation_application.hpp"
+
+#include "offline_translator/argos_engine.hpp"
+#include "offline_translator/argos_model_manager.hpp"
+#include "offline_translator/nllb_engine.hpp"
+#include "offline_translator/nllb_model_manager.hpp"
+#include "offline_translator/translation_service.hpp"
+
+#include <stdexcept>
+#include <utility>
+
+namespace offline_translator {
+
+class TranslationApplication::State {
+public:
+    State(EngineKind kind, std::filesystem::path root)
+        : engine_kind(kind), models_root(std::move(root)) {
+        if (models_root.empty()) {
+            throw std::invalid_argument("Не задан корень моделей");
+        }
+        if (engine_kind == EngineKind::argos) {
+            engine = std::make_unique<ArgosEngine>(models_root);
+        } else if (engine_kind == EngineKind::nllb) {
+            engine = std::make_unique<NllbEngine>(models_root);
+        } else {
+            throw std::invalid_argument("Неизвестный тип движка");
+        }
+
+        service = std::make_unique<TranslationService>(
+            [this](std::string_view source, std::string_view target) {
+                if (engine_kind == EngineKind::argos) {
+                    return ArgosModelManager(
+                               models_root,
+                               std::string(source),
+                               std::string(target))
+                        .is_installed();
+                }
+                return NllbModelManager(models_root).is_installed() &&
+                       source != target;
+            },
+            [this](
+                std::string_view text,
+                std::string_view source,
+                std::string_view target) {
+                return engine->translate(text, source, target).text;
+            },
+            TranslationApplication::engine_name(engine_kind));
+    }
+
+    void stop() {
+        service->stop();
+        engine->stop();
+    }
+
+    EngineKind engine_kind;
+    std::filesystem::path models_root;
+    std::unique_ptr<TranslationEngine> engine;
+    std::unique_ptr<TranslationService> service;
+};
+
+TranslationApplication::TranslationApplication(
+    EngineKind engine_kind,
+    std::filesystem::path models_root)
+    : state_(std::make_unique<State>(engine_kind, std::move(models_root))) {}
+
+TranslationApplication::~TranslationApplication() {
+    if (state_) {
+        state_->stop();
+    }
+}
+
+TranslationResult TranslationApplication::translate(
+    std::string_view text,
+    std::string_view source_code,
+    std::string_view target_code) {
+    if (!state_) {
+        throw std::runtime_error("Приложение перевода не инициализировано");
+    }
+    return state_->service->translate(text, source_code, target_code);
+}
+
+void TranslationApplication::warmup(
+    std::string_view source_code,
+    std::string_view target_code) {
+    state_->service->warmup(source_code, target_code);
+}
+
+void TranslationApplication::invalidate() {
+    if (state_) {
+        state_->service->invalidate();
+        state_->engine->invalidate();
+    }
+}
+
+void TranslationApplication::stop() {
+    if (state_) {
+        state_->stop();
+    }
+}
+
+std::string TranslationApplication::engine_name(EngineKind engine_kind) {
+    if (engine_kind == EngineKind::argos) {
+        return "Argos";
+    }
+    if (engine_kind == EngineKind::nllb) {
+        return "NLLB";
+    }
+    throw std::invalid_argument("Неизвестный тип движка");
+}
+
+}  // пространство имён offline_translator

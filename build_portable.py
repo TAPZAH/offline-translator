@@ -20,9 +20,6 @@ DIST_DIR = ROOT / "dist" / DIST_NAME
 LITE_DIR = ROOT / "dist" / "offline-translator-portable-lite"
 FULL_DIR = ROOT / "dist" / "offline-translator-portable-full"
 RELEASE_DIR = ROOT / "release"
-FIREFOX_MODELS = (
-    Path.home() / ".local" / "share" / "offline-translator" / "firefox-models"
-)
 ARGOS_PACKAGES = Path.home() / ".local" / "share" / "argos-translate" / "packages"
 NLLB_MODELS = (
     Path.home() / ".local" / "share" / "offline-translator" / "nllb-200"
@@ -89,20 +86,9 @@ def _reset_dir(target: Path) -> None:
 
 def copy_language_packages(portable_dir: Path) -> dict[str, bool]:
     """Кладёт оффлайн-модели рядом с exe."""
-    bundled = {"firefox": False, "argos": False, "nllb": False}
+    bundled = {"argos": False, "nllb": False}
     data_dir = portable_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
-
-    if _has_model_bin(FIREFOX_MODELS):
-        _copy_tree(
-            FIREFOX_MODELS,
-            data_dir / "firefox-models",
-            ignore=shutil.ignore_patterns("_downloads"),
-        )
-        bundled["firefox"] = True
-        print("Скопированы модели Firefox")
-    else:
-        print(f"Нет готовых моделей Firefox: {FIREFOX_MODELS}")
 
     if _has_model_bin(ARGOS_PACKAGES):
         _copy_tree(
@@ -134,17 +120,15 @@ def write_portable_settings(portable_dir: Path, bundled: dict[str, bool] | None)
     data_dir = portable_dir / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     if bundled:
-        if bundled.get("firefox"):
-            engine = "firefox"
-        elif bundled.get("argos"):
+        if bundled.get("argos"):
             engine = "argos"
         elif bundled.get("nllb"):
             engine = "nllb"
         else:
-            engine = "firefox"
+            engine = "argos"
         architecture = "base"
     else:
-        engine = "firefox"
+        engine = "argos"
         architecture = "tiny"
     settings = {
         "engine": engine,
@@ -160,7 +144,7 @@ def write_readme(portable_dir: Path, with_models: bool) -> None:
     """Краткая инструкция внутри архива."""
     if with_models:
         extra = (
-            "В папке data уже лежат языковые модели (Firefox, Argos"
+            "В папке data уже лежат языковые модели (Argos"
             + (", NLLB-200" if NLLB_MODEL_BIN.is_file() else "")
             + "). Интернет для первого перевода не нужен.\n"
         )
@@ -177,7 +161,7 @@ def write_readme(portable_dir: Path, with_models: bool) -> None:
         "\n"
         f"{extra}"
         "Не удаляйте папки _internal и data.\n"
-        "Движок (Firefox, Argos или NLLB-200) переключается в «Настройки...».\n"
+        "Движок (Argos или NLLB-200) переключается в «Настройки...».\n"
         "Автозагрузка включается в «Настройки...».\n"
         "\n"
         "Ошибки пишутся в data\\error.log\n"

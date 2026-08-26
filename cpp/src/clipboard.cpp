@@ -166,17 +166,61 @@ void send_copy_keyboard_shortcut() {
     SendInput(4, inputs, sizeof(INPUT));
 }
 
+namespace {
+void (*g_capture_wait_hook)(std::uint32_t) = nullptr;
+
+void capture_wait(std::uint32_t milliseconds) {
+    if (g_capture_wait_hook) {
+        g_capture_wait_hook(milliseconds);
+    } else {
+        Sleep(milliseconds);
+    }
+}
+}  // namespace
+
+void set_capture_wait_hook(void (*hook)(std::uint32_t milliseconds)) {
+    g_capture_wait_hook = hook;
+}
+
 std::wstring capture_selected_text_win32(void* owner_hwnd) {
     Win32Clipboard clipboard(owner_hwnd);
+    ClipboardRestorer restorer(clipboard);
     const std::wstring sentinel =
         L"__ot_sel_" + std::to_wstring(GetTickCount64()) + L"__";
-    return capture_selected_text(
-        clipboard,
-        []() {
-            send_copy_keyboard_shortcut();
-            Sleep(80);
-        },
-        sentinel);
+    clipboard.set_text(sentinel);
+    send_copy_keyboard_shortcut();
+    // Приложение копирует выделение асинхронно: опрашиваем буфер,
+    // пока текст не сменится, но не дольше ~0.6 с.
+    std::wstring selected;
+    for (int attempt = 0; attempt < 12; ++attempt) {
+        capture_wait(50);
+        try {
+            selected = clipboard.get_text();
+        } catch (...) {
+            selected.clear();
+        }
+        if (!selected.empty() && selected != sentinel) {
+            break;
+        }
+    }
+    while (!selected.empty() &&
+           (selected.back() == L' ' || selected.back() == L'\t' ||
+            selected.back() == L'\r' || selected.back() == L'\n')) {
+        selected.pop_back();
+    }
+    std::size_t begin = 0;
+    while (begin < selected.size() &&
+           (selected[begin] == L' ' || selected[begin] == L'\t' ||
+            selected[begin] == L'\r' || selected[begin] == L'\n')) {
+        ++begin;
+    }
+    if (begin > 0) {
+        selected.erase(0, begin);
+    }
+    if (selected.empty() || selected == sentinel) {
+        return {};
+    }
+    return selected;
 }
 
 #endif

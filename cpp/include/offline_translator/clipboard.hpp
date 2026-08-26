@@ -65,6 +65,11 @@ std::wstring capture_selected_text(
 #ifdef _WIN32
 void send_copy_keyboard_shortcut();
 std::wstring capture_selected_text_win32(void* owner_hwnd = nullptr);
+
+// Ожидание внутри capture_selected_text_win32. GUI подменяет на вариант,
+// который прокачивает сообщения: иначе инжектированный Ctrl+C не будет
+// доставлен сфокусированному окну, пока поток спит.
+void set_capture_wait_hook(void (*hook)(std::uint32_t milliseconds));
 #endif
 
 }  // пространство имён offline_translator

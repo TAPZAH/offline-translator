@@ -36,6 +36,7 @@
 #include <mutex>
 #include <set>
 #include <stdexcept>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -128,6 +129,8 @@ struct StatusPayload {
     std::wstring text;
     bool failed{false};
 };
+
+void sel_log(const std::string& line);
 
 struct PackageRow {
     bool nllb{false};
@@ -1096,11 +1099,13 @@ bool compose_selection_icon_bitmap(HBITMAP* out_bitmap) {
     *out_bitmap = nullptr;
     const std::wstring path = find_selection_icon_path();
     if (path.empty()) {
+        sel_log("compose: icon.png не найден");
         return false;
     }
     std::unique_ptr<Gdiplus::Bitmap> source(
         Gdiplus::Bitmap::FromFile(path.c_str()));
     if (!source || source->GetLastStatus() != Gdiplus::Ok) {
+        sel_log("compose: Bitmap::FromFile не удался");
         return false;
     }
     std::unique_ptr<Gdiplus::Bitmap> target(
@@ -1174,6 +1179,22 @@ bool compose_selection_icon_bitmap(HBITMAP* out_bitmap) {
             DeleteObject(bitmap);
         }
         return false;
+    }
+    // Диагностика: дамп скомпонованной иконки в %TEMP%.
+    wchar_t dump_flag[8]{};
+    if (GetEnvironmentVariableW(
+            L"OT_DUMP_BUTTON",
+            dump_flag,
+            static_cast<DWORD>(std::size(dump_flag))) > 0) {
+        CLSID png_clsid{};
+        if (CLSIDFromString(
+                L"{557CF406-1A04-11D3-9A73-0000F81EF32E}",
+                &png_clsid) == S_OK) {
+            wchar_t temp_dir[MAX_PATH]{};
+            GetTempPathW(MAX_PATH, temp_dir);
+            std::wstring dump = std::wstring(temp_dir) + L"fxbutton.png";
+            target->Save(dump.c_str(), &png_clsid, nullptr);
+        }
     }
     *out_bitmap = bitmap;
     return true;
@@ -1333,6 +1354,38 @@ bool is_over_our_popup(int x, int y) {
         }
     }
     return false;
+}
+
+void sel_log(const std::string& line) {
+    wchar_t flag[8]{};
+    if (GetEnvironmentVariableW(
+            L"OT_SEL_LOG",
+            flag,
+            static_cast<DWORD>(std::size(flag))) == 0) {
+        return;
+    }
+    char temp_dir[MAX_PATH]{};
+    GetTempPathA(MAX_PATH, temp_dir);
+    std::ofstream log(std::string(temp_dir) + "ot_sel.log",
+                      std::ios::binary | std::ios::app);
+    if (log) {
+        log << line << "\n";
+    }
+}
+
+// Ожидание в capture_selected_text_win32 с прокачкой сообщений:
+// инжектированный Ctrl+C доставляется очередью нашему же потоку, и без
+// прокачки EDIT никогда его не обработает.
+void pump_wait(std::uint32_t milliseconds) {
+    const ULONGLONG deadline = GetTickCount64() + milliseconds;
+    while (GetTickCount64() < deadline) {
+        MSG message{};
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        Sleep(10);
+    }
 }
 
 bool is_client_hit(int x, int y, HWND hwnd) {
@@ -1778,15 +1831,30 @@ void start_selection_translation(HWND main_window) {
 }
 
 void capture_and_show_button(HWND main_window, int cursor_x, int cursor_y) {
+    // Захват идёт в GUI-потоке; повторный вход через прокачанные сообщения
+    // должен быть невозможен.
+    static std::atomic<bool> capturing{false};
+    if (capturing.exchange(true)) {
+        return;
+    }
+    struct CaptureGuard {
+        std::atomic<bool>& flag;
+        ~CaptureGuard() {
+            flag = false;
+        }
+    } guard{capturing};
     try {
         const std::wstring selected =
             offline_translator::capture_selected_text_win32(main_window);
+        sel_log("captured: size=" + std::to_string(selected.size()));
         if (selected.size() < 2) {
             return;
         }
         g_selection.selected_text = selected;
         show_selection_button(cursor_x, cursor_y, main_window);
-    } catch (const std::exception&) {
+        sel_log("button shown");
+    } catch (const std::exception& error) {
+        sel_log(std::string("capture error: ") + error.what());
     }
 }
 
@@ -1853,6 +1921,10 @@ void poll_selection(HWND main_window) {
             g_selection.press_is_client = is_client_hit(cursor.x, cursor.y, hwnd);
             g_selection.gesture_invalid = !g_selection.press_is_client;
             g_selection.press_active = true;
+            sel_log("press: hwnd=" +
+                    std::to_string(reinterpret_cast<uintptr_t>(
+                        g_selection.press_hwnd)) +
+                    " client=" + std::to_string(g_selection.press_is_client));
         }
     } else if (pressed && g_selection.was_pressed && g_selection.press_active) {
         if (!g_selection.gesture_invalid) {
@@ -1894,7 +1966,8 @@ void poll_selection(HWND main_window) {
         g_selection.last_up_hwnd = g_selection.press_hwnd;
         g_selection.last_up_x = cursor.x;
         g_selection.last_up_y = cursor.y;
-        if (!g_selection.gesture_invalid &&
+        const bool ctrl_now = key_down(VK_CONTROL);
+        const bool gate = !g_selection.gesture_invalid &&
             !is_over_our_popup(cursor.x, cursor.y) &&
             offline_translator::should_capture_selection(
                 g_selection.press_is_client,
@@ -1904,7 +1977,17 @@ void poll_selection(HWND main_window) {
                 is_double_click) &&
             offline_translator::should_show_selection_button(
                 g_runtime->settings.popup_requires_ctrl,
-                key_down(VK_CONTROL))) {
+                ctrl_now);
+        sel_log(
+            "release: dist=" + std::to_string(drag_distance) + " dur=" +
+            std::to_string(drag_duration) + " dbl=" +
+            std::to_string(is_double_click) + " moved=" +
+            std::to_string(window_moved) + " invalid=" +
+            std::to_string(g_selection.gesture_invalid) + " ctrl=" +
+            std::to_string(ctrl_now) + " requires_ctrl=" +
+            std::to_string(g_runtime->settings.popup_requires_ctrl) +
+            " gate=" + std::to_string(gate));
+        if (gate) {
             capture_and_show_button(main_window, cursor.x, cursor.y);
         }
         g_selection.press_active = false;
@@ -3134,6 +3217,33 @@ int run_popup_smoke_loop(HWND window) {
     if (!pump(10)) {
         return static_cast<int>(message.wParam);
     }
+    // Кнопка обязана быть видимой на экране: в квадрате 40×40 должно
+    // найтись несколько разных пикселей (иконка), а не сплошной фон.
+    {
+        RECT button_rect{};
+        GetWindowRect(g_selection_button, &button_rect);
+        HDC screen = GetDC(nullptr);
+        COLORREF reference = GetPixel(
+            screen,
+            (button_rect.left + button_rect.right) / 2 - 18,
+            (button_rect.top + button_rect.bottom) / 2 - 18);
+        int distinct = 0;
+        for (int step_y = 4; step_y < 40; step_y += 8) {
+            for (int step_x = 4; step_x < 40; step_x += 8) {
+                const COLORREF pixel = GetPixel(
+                    screen,
+                    button_rect.left + step_x,
+                    button_rect.top + step_y);
+                if (pixel != reference) {
+                    ++distinct;
+                }
+            }
+        }
+        ReleaseDC(nullptr, screen);
+        if (distinct < 3) {
+            return 1;
+        }
+    }
     hide_selection_button();
 
     g_runtime->settings.result_window_mode =
@@ -3184,6 +3294,7 @@ int WINAPI wWinMain(
         (command_has_flag(command_line, L"--minimized") ||
          command_has_flag(GetCommandLineW(), L"--minimized"));
     g_runtime = std::make_shared<GuiRuntime>();
+    offline_translator::set_capture_wait_hook(&pump_wait);
 
     const wchar_t class_name[] = L"OfflineTranslatorWindow";
     WNDCLASSW window_class{};
@@ -3307,7 +3418,9 @@ int WINAPI wWinMain(
     if (g_start_minimized) {
         hide_to_tray(window);
     } else {
-        ShowWindow(window, show_command);
+        // Запуск через CreateProcess может прийти с nCmdShow=0 (SW_HIDE):
+        // окно обязано появиться, как при обычном двойном клике.
+        ShowWindow(window, show_command == 0 ? SW_SHOWNORMAL : show_command);
         UpdateWindow(window);
     }
 

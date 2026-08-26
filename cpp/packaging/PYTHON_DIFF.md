@@ -5,10 +5,15 @@
 
 ## Движки
 
-- **Firefox Translations отложен.** В Python `firefox_engine.py` и
-  `ENGINE_FIREFOX` ещё есть, но `app_settings.ENGINES` уже только
-  `argos` / `nllb`; `translation_engine.get_engine()` Firefox не создаёт.
-  В C++ движка Firefox нет (нет fxtranslate / Bergamot).
+- **Firefox Translations включён.** C++ использует тот же нативный Rust-
+  движок `fxtranslate`, что и Python-пакет: тонкий мост `cpp/fxbridge`
+  (cdylib, C-ABI) собирается в `fxbridge.dll` и загружается через
+  LoadLibrary рядом с exe. Раскладка моделей совпадает с Python
+  (`firefox-models/<arch>/<from>-<to>`, legacy-плоский tiny). Переводы
+  байт-в-байт совпадают с Python (`translate_long`). Мост привязывает
+  движок к рабочему потоку — как Python FirefoxEngine.
+  Пересборка моста: `cargo build --release` в `cpp/fxbridge`
+  (нужен Rust toolchain).
 - **Argos: удалённый индекс.** Python читает `argostranslate.package`
   (`update_package_index` → `get_available_packages`). C++
   `ArgosModelManager::available_packages()` разбирает тот же JSON
@@ -21,30 +26,41 @@
   `nllb-200-distilled-600M` в `%USERPROFILE%\.local\share\offline-translator\nllb-200`
   (или `OFFLINE_TRANSLATOR_NLLB` / portable `data/nllb-200`). Каталог NLLB
   в C++ фиксированный, индекс не качается.
-- **Параметры CTranslate2 не совпадают**, поэтому формулировки перевода
-  могут отличаться, и это не регресс сам по себе:
-  - Python Argos: `beam_size=2`, резка на предложения (`_split_sentences`).
-  - Python NLLB: `beam_size=2`, `max_decoding_length=512`, `compute_type="int8"`.
-  - C++: `beam_size=2`; NLLB `max_decoding_length=512`. `ComputeType::AUTO`
-    (INT8 на этой OpenBLAS-сборке CTranslate2 недоступен:
-    «target device or backend do not support efficient int8 computation»).
-    Argos режет предложения как Python и переводит пакетом.
+- **Параметры CTranslate2 совпадают.** Argos: `beam_size=2`, резка на
+  предложения; NLLB: `beam_size=2`, `max_decoding_length=512`,
+  `compute_type=int8` — сборка CTranslate2 с oneDNN
+  (`build-openblas-dnnl`) поддержала INT8; без неё адаптер молча
+  откатывается на AUTO. NLLB-вывод совпал с Python байт-в-байт
+  («Здравствуйте , мирно .» для `Hello world`).
 
 ## GUI и выделение
 
 - Python: tkinter, попап выделения с PNG `assets/icon.png` (PIL), полное
   окно «Языки» с поиском и удалённым индексом.
-- C++: Win32. Кнопка выделения — попап 40×40 с текстом `Aa`, без PNG.
-  Окно результата у курсора: копирование / закрытие, режимы
-  `click_to_close` и `selectable`. Жесты (порог драга 16 px, 0.18 с,
-  double Ctrl+C 0.7 с) совпадают по константам с Python.
-- Комбо языков C++ показывает **56 ISO-кодов NLLB** для обоих движков.
-  Для Argos это не значит, что пакет скачан: нужна локальная пара, иначе
-  перевод падает с ошибкой маршрута. Окно «Пакеты» C++ перечисляет пары
-  из кэша `argospm-index` (как Python `get_available_packages`) плюс
-  установленные. Python в «Языках» ещё даёт поиск по каталогу Firefox.
-- `language_display_name` в C++ — короткий словарь; в Python —
-  `LANGUAGE_NAMES` на десятки языков.
+- C++: Win32. Кнопка выделения теперь рисует тот же `assets/icon.png`
+  через GDI+ (`UpdateLayeredWindow`, premultiplied ARGB), повторяет
+  `_fill_clickable_disk` (клик в центр знака не проваливается) и
+  масштабирует 40×40 как Python LANCZOS ≈ HighQualityBicubic. Без файла
+  иконки — фолбэк «Aa». Окно результата у курсора: копирование /
+  закрытие, режимы `click_to_close` и `selectable`; палитра #f2f2f2 /
+  #dedede / #ccc / #333, Segoe UI 8/9/11, полупрозрачность 0.97,
+  рамка 1px, плоские кнопки с hover, высота под текст 2..12 строк,
+  Escape закрывает, копируется выделение текста если оно есть.
+  Жесты (порог драга 16 px, 0.18 с, double Ctrl+C 0.7 с) совпадают
+  по константам с Python.
+- Отличие от Python (намеренное): позиция попапа прижимается к рабочей
+  области монитора, чтобы окно не уходило за край экрана.
+- Комбо языков C++ показывает **те же 56 языков**, что и NLLB, но с
+  русскими названиями из единой таблицы `language_store` (как
+  `LANGUAGE_NAMES` в Python). Для Argos это не значит, что пакет скачан:
+  нужна локальная пара, иначе перевод падает с ошибкой маршрута. Окно
+  «Пакеты» C++ перечисляет пары из кэша `argospm-index` (как Python
+  `get_available_packages`) плюс установленные, сортирует как Python
+  (установленные → пары с ru/en → по кодам) и даёт **поиск** по кодам и
+  русским названиям — аналог поиска в «Языках» Python.
+- Названия языков: единая таблица `supported_languages()` в
+  `language_store` покрывает все 56 кодов; словарь `language_display_name`
+  в selection.cpp остаётся только для заголовков попапа.
 
 ## Определение языка
 
@@ -93,27 +109,23 @@
 
 ## Что C++ не повторяет
 
-- Полноценный попап выделения Python (иконка, стили overlay).
-- Firefox / Bergamot.
-- `langdetect`.
+- `langdetect` (эвристика по письму — как Python без пакета).
 - Нарезка предложений Argos в C++ совпадает по правилам с Python.
   Длинный NLLB-выход ограничен 512 токенами, как в Python.
 
 ## Наблюдения qa-parity (`Hello world` en→ru)
 
-Запуск 2026-08-25, те же пользовательские модели. Этап **не** считает
-расхождение формулировок провалом.
+Запуск 2026-08-25/26, те же пользовательские модели. Этап **не** считает
+расхождение формулировок провалом; после INT8-сборки NLLB совпал с Python.
 
 | Источник | Текст |
 |---|---|
 | Python Argos | Привет, мир |
-| Python NLLB | Здравствуйте , мирно . |
+| Python NLLB (int8) | Здравствуйте , мирно . |
+| Python Firefox (base) | привет, мир. сегодня погода хорошая. (длинный вход) |
 | C++ `argos_smoke` | Привет, мир |
-| C++ `translator_cli` Argos | Привет, мир (повтор: Адский мир) |
-| C++ `nllb_smoke` | Здравствуйте, мир |
-| C++ `translator_cli` NLLB | Привет, мир. |
+| C++ `translator_cli` Argos | Привет, мир |
+| C++ `nllb_smoke` (int8+oneDNN) | Здравствуйте , мирно . |
+| C++ `firefox_smoke` | привет, мир. сегодня погода хорошая. |
 
-C++ Argos на одном и том же входе иногда даёт другой greedy-выход
-(`beam_size=1`, OpenBLAS). Python NLLB ближе к `nllb_smoke`, не к
-`translator_cli`. При выходе Argos-процесса бывает
-`BLAS : Bad memory unallocation!`.
+NLLB и Firefox теперь совпадают с Python байт-в-байт.

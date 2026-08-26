@@ -5,9 +5,10 @@
     "platform": "Windows 10/11 x64",
     "engines": [
       "argos",
-      "nllb"
+      "nllb",
+      "firefox"
     ],
-    "firefox_bergamot": "deferred"
+    "firefox_bergamot": "done (fxbridge.dll поверх Rust-движка fxtranslate)"
   },
   "automation": {
     "enabled": true,
@@ -22,11 +23,10 @@
     "path": "C:\\Users\\Gelezyaka\\.cursor\\projects\\c-work-offline-translator\\canvases\\cpp-migration-plan.canvas.tsx",
     "update_after_review": true
   },
-  "progress_percent": 90,
-  "current_stage": "languages-store",
-  "status": "pending",
-  "updated_at": "2026-08-25T19:44:00.000Z",
-  "stages": [
+  "progress_percent": 100,
+  "current_stage": "",
+  "status": "complete",
+  "updated_at": "2026-08-26T00:00:00.000Z",  "stages": [
     {
       "id": "foundation",
       "status": "completed",
@@ -80,17 +80,61 @@
     {
       "id": "languages-store",
       "title": "GUI language store with search over Argos catalog",
-      "status": "pending"
+      "status": "completed",
+      "accepted_at": "2026-08-26T00:00:00.000Z",
+      "evidence": [
+        "language_store core: единая таблица 56 языков с русскими названиями, merge каталога и установленных без дублей, сортировка как в Python, регистронезависимый поиск (ASCII+кириллица)",
+        "GUI окно пакетов: строка поиска с фильтром по кодам/названиям, человекочитаемые подписи пар, статус «Показано N из M»",
+        "core_tests 3/3 в build-core-only; ctest build-ctranslate2 7/7 (core, integration, package check, dlls, nllb_smoke, argos_smoke, win32_gui_smoke)"
+      ]
+    },
+    {
+      "id": "selection-ui-parity",
+      "title": "Selection button and result popup parity with Python",
+      "status": "completed",
+      "accepted_at": "2026-08-26T00:00:00.000Z",
+      "evidence": [
+        "Кнопка выделения: assets/icon.png через GDI+/UpdateLayeredWindow 40×40, кликабельный диск как _fill_clickable_disk, фолбэк Aa",
+        "Попап результата: Segoe UI 8/9/11, палитра #f2f2f2/#dedede/#ccc/#333, альфа 0.97, рамка 1px, высота 2..12 строк, Escape, копирование выделения, клэмпинг к рабочей области",
+        "Новый ctest win32_popup_smoke (--smoke-popup) проверяет оба режима; полный прогон 8/8"
+      ]
+    },
+    {
+      "id": "portable-with-models",
+      "title": "Build model-bundled portable (-IncludeModels)",
+      "status": "completed",
+      "accepted_at": "2026-08-26T00:00:00.000Z",
+      "evidence": [
+        "package_win32.ps1 -IncludeModels: 46 файлов, ~1001 МБ; NLLB model.bin 622 МБ, 2 пакета Argos, assets/icon.png в поставке",
+        "check_package.ps1: gdiplus.dll добавлен в системный allow-list, импорты сходятся",
+        "--smoke-popup из портативной папки → exit 0; translator_cli nllb и argos_smoke на моделях из data/ переводят Hello world → Привет, мир."
+      ]
+    },
+    {
+      "id": "nllb-int8-dnnl",
+      "title": "NLLB INT8 via oneDNN build of CTranslate2",
+      "status": "completed",
+      "accepted_at": "2026-08-26T00:00:00.000Z",
+      "evidence": [
+        "CTranslate2 собран с WITH_DNNL=ON (build-openblas-dnnl), oneDNN 3.13.1 из исходников; dnnl.dll деплоится рядом с exe",
+        "Адаптер NLLB: INT8 c тихим фолбэком AUTO; nllb_smoke ~1 c вместо 10-16 c",
+        "Вывод NLLB совпал с Python байт-в-байт: «Здравствуйте , мирно .»"
+      ]
+    },
+    {
+      "id": "firefox-bergamot",
+      "title": "Firefox Translations engine in C++ via fxtranslate bridge",
+      "status": "completed",
+      "accepted_at": "2026-08-26T00:00:00.000Z",
+      "evidence": [
+        "cpp/fxbridge (Rust cdylib): C-ABI к fxtranslate 0.4.2, thread-local диагностика ошибок, cargo build --release",
+        "firefox_engine + firefox_model_manager + compression(gunzip/zstd): раскладка как language_packages.py, каталог GitHub+fallback, pivot en",
+        "GUI: движок «Firefox» в комбо, секция пакетов Firefox с выбором tiny/base; Python ENGINES оживлён (argos/nllb/firefox)",
+        "firefox_smoke: перевод base/en-ru байт-в-байт равен Python; полный ctest 9/9; портативы lite/full пересобраны и проверены"
+      ]
     }
   ],
-  "blockers": [
-    "GUI language combos still use 56 NLLB ISO codes, not the Argos catalog",
-    "Packages list has no search",
-    "Selection UI is not pixel-perfect vs Python",
-    "Model-bundled portable (-IncludeModels) was not built",
-    "Firefox / Bergamot remains deferred",
-    "NLLB INT8 compute type unsupported on this CTranslate2 OpenBLAS build"
-  ],
+  "blockers": [],
   "last_subagent": {
     "status": "completed",
     "type": "general-purpose",

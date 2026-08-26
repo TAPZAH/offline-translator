@@ -94,10 +94,18 @@ bool read_bool(const nlohmann::json& data, const char* key, bool fallback) {
 
 std::string read_engine(const nlohmann::json& data) {
     const auto engine = read_string(data, "engine", "argos");
-    if (engine == "nllb" || engine == "argos") {
+    if (engine == "nllb" || engine == "argos" || engine == "firefox") {
         return engine;
     }
     return "argos";
+}
+
+std::string read_architecture(const nlohmann::json& data) {
+    const auto architecture = read_string(data, "architecture", "tiny");
+    if (architecture == "tiny" || architecture == "base") {
+        return architecture;
+    }
+    return "tiny";
 }
 
 std::string read_result_window_mode(const nlohmann::json& data) {
@@ -175,6 +183,7 @@ AppSettings load_settings(const std::filesystem::path& path) {
             read_bool(data, "double_ctrl_c_translation", false);
         settings.result_window_mode = read_result_window_mode(data);
         settings.translate_hotkey = read_translate_hotkey(data);
+        settings.architecture = read_architecture(data);
     } catch (...) {
         return AppSettings{};
     }
@@ -203,12 +212,18 @@ void save_settings(
     data["double_ctrl_c_translation"] = settings.double_ctrl_c_translation;
     data["result_window_mode"] = settings.result_window_mode;
     data["translate_hotkey"] = settings.translate_hotkey;
+    if (settings.architecture == "tiny" || settings.architecture == "base") {
+        data["architecture"] = settings.architecture;
+    }
     fs_utils::write_text_file(path, data.dump(2) + "\n");
 }
 
 EngineKind engine_kind_from_settings(std::string_view engine) {
     if (engine == "nllb") {
         return EngineKind::nllb;
+    }
+    if (engine == "firefox") {
+        return EngineKind::firefox;
     }
     return EngineKind::argos;
 }
@@ -219,6 +234,9 @@ std::string settings_engine_name(EngineKind engine_kind) {
     }
     if (engine_kind == EngineKind::argos) {
         return "argos";
+    }
+    if (engine_kind == EngineKind::firefox) {
+        return "firefox";
     }
     throw std::invalid_argument("Неизвестный тип движка");
 }

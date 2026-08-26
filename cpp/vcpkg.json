@@ -7,6 +7,12 @@
     },
     {
       "name": "sentencepiece"
+    },
+    {
+      "name": "zlib"
+    },
+    {
+      "name": "zstd"
     }
   ]
 }

@@ -2,7 +2,9 @@
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
+#include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
+#include "offline_translator/language_store.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/selection.hpp"
 #include "offline_translator/translation_application.hpp"
@@ -11,8 +13,15 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef EM_SETCUEBANNER
+#define EM_SETCUEBANNER 0x1501
+#endif
 #include <windows.h>
 #include <shellapi.h>
+#include <commctrl.h>
+#include <gdiplus.h>
+
+#pragma comment(lib, "gdiplus.lib")
 
 #include <algorithm>
 #include <array>
@@ -25,6 +34,7 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -55,6 +65,8 @@ constexpr int kPackageList = 1101;
 constexpr int kPackageInstallButton = 1102;
 constexpr int kPackageUninstallButton = 1103;
 constexpr int kPackageCloseButton = 1104;
+constexpr int kPackageSearchEdit = 1105;
+constexpr int kPackageArchCombo = 1106;
 constexpr int kSettingsPopupCtrl = 1201;
 constexpr int kSettingsDoubleCtrlC = 1202;
 constexpr int kSettingsClickToClose = 1203;
@@ -87,6 +99,9 @@ HWND g_package_list = nullptr;
 HWND g_package_install = nullptr;
 HWND g_package_uninstall = nullptr;
 HWND g_package_status = nullptr;
+HWND g_package_search = nullptr;
+HWND g_package_arch_caption = nullptr;
+HWND g_package_arch_combo = nullptr;
 HWND g_settings_popup_ctrl = nullptr;
 HWND g_settings_double_ctrl_c = nullptr;
 HWND g_settings_click_to_close = nullptr;
@@ -97,75 +112,17 @@ HWND g_selection_button = nullptr;
 HWND g_result_popup = nullptr;
 HWND g_popup_result_edit = nullptr;
 HWND g_popup_copy_button = nullptr;
-bool g_smoke_mode = false;
-bool g_start_minimized = false;
+bool g_button_uses_icon = false;
+constexpr int kSelectionIconSize = 40;
+constexpr COLORREF kPopupBackground = RGB(242, 242, 242);
+constexpr COLORREF kPopupBorder = RGB(0, 0, 0);
+constexpr COLORREF kPopupHeaderText = RGB(51, 51, 51);
+constexpr COLORREF kButtonFace = RGB(222, 222, 222);
+constexpr COLORREF kButtonHover = RGB(204, 204, 204);
+bool g_smoke_mode = false;bool g_start_minimized = false;
 bool g_tray_added = false;
 HICON g_tray_icon = nullptr;
 NOTIFYICONDATAW g_tray_data{};
-
-struct LanguageOption {
-    const char* code;
-    const wchar_t* name;
-};
-
-constexpr LanguageOption kLanguages[]{
-    {"en", L"English"},
-    {"ru", L"Русский"},
-    {"de", L"Deutsch"},
-    {"fr", L"Français"},
-    {"es", L"Español"},
-    {"it", L"Italiano"},
-    {"pt", L"Português"},
-    {"zh", L"中文"},
-    {"ja", L"日本語"},
-    {"ko", L"한국어"},
-    {"ar", L"العربية"},
-    {"uk", L"Українська"},
-    {"pl", L"Polski"},
-    {"tr", L"Türkçe"},
-    {"nl", L"Nederlands"},
-    {"cs", L"Čeština"},
-    {"sv", L"Svenska"},
-    {"fi", L"Suomi"},
-    {"el", L"Ελληνικά"},
-    {"he", L"עברית"},
-    {"hi", L"हिन्दी"},
-    {"id", L"Bahasa Indonesia"},
-    {"az", L"Azərbaycan"},
-    {"be", L"Беларуская"},
-    {"bg", L"Български"},
-    {"bn", L"বাংলা"},
-    {"bs", L"Bosanski"},
-    {"ca", L"Català"},
-    {"da", L"Dansk"},
-    {"et", L"Eesti"},
-    {"fa", L"فارسی"},
-    {"gu", L"ગુજરાતી"},
-    {"hr", L"Hrvatski"},
-    {"hu", L"Magyar"},
-    {"is", L"Íslenska"},
-    {"kn", L"ಕನ್ನಡ"},
-    {"lt", L"Lietuvių"},
-    {"lv", L"Latviešu"},
-    {"ml", L"മലയാളം"},
-    {"ms", L"Bahasa Melayu"},
-    {"mt", L"Malti"},
-    {"nb", L"Norsk Bokmål"},
-    {"nn", L"Norsk Nynorsk"},
-    {"ro", L"Română"},
-    {"sk", L"Slovenčina"},
-    {"sl", L"Slovenščina"},
-    {"sq", L"Shqip"},
-    {"sr", L"Српски"},
-    {"ta", L"தமிழ்"},
-    {"te", L"తెలుగు"},
-    {"th", L"ไทย"},
-    {"vi", L"Tiếng Việt"},
-    {"mk", L"Македонски"},
-    {"gl", L"Galego"},
-    {"ur", L"اردو"},
-    {"ka", L"ქართული"},
-};
 
 struct StatusPayload {
     std::wstring text;
@@ -174,6 +131,8 @@ struct StatusPayload {
 
 struct PackageRow {
     bool nllb{false};
+    bool firefox{false};
+    std::string architecture;
     std::string from_code;
     std::string to_code;
     std::wstring title;
@@ -193,6 +152,7 @@ struct GuiRuntime {
     HWND packages_window{nullptr};
     HWND settings_window{nullptr};
     std::vector<PackageRow> package_rows;
+    std::vector<PackageRow> package_rows_all;
 };
 
 struct SelectionMonitor {
@@ -313,6 +273,29 @@ std::filesystem::path model_root_path(bool use_nllb) {
     return std::filesystem::path(model_root(use_nllb));
 }
 
+std::wstring firefox_model_root() {
+    const std::wstring portable_root =
+        executable_directory() + L"\\data\\firefox-models";
+    if (GetFileAttributesW(portable_root.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return portable_root;
+    }
+    const std::wstring profile = user_profile();
+    return profile + L"\\.local\\share\\offline-translator\\firefox-models";
+}
+
+std::filesystem::path model_root_for_kind(
+    offline_translator::EngineKind kind) {
+    switch (kind) {
+        case offline_translator::EngineKind::nllb:
+            return model_root_path(true);
+        case offline_translator::EngineKind::firefox:
+            return std::filesystem::path(firefox_model_root());
+        case offline_translator::EngineKind::argos:
+            break;
+    }
+    return model_root_path(false);
+}
+
 std::wstring clipboard_text() {
     offline_translator::Win32Clipboard clipboard;
     return clipboard.get_text();
@@ -328,9 +311,26 @@ bool key_down(int virtual_key) {
     return (GetAsyncKeyState(virtual_key) & 0x8000) != 0;
 }
 
+std::size_t language_count() {
+    return offline_translator::supported_languages().size();
+}
+
+const std::vector<std::wstring>& combo_language_names() {
+    static const std::vector<std::wstring> names = [] {
+        std::vector<std::wstring> result;
+        result.reserve(offline_translator::supported_languages().size());
+        for (const auto& entry : offline_translator::supported_languages()) {
+            result.push_back(from_utf8(entry.name));
+        }
+        return result;
+    }();
+    return names;
+}
+
 int language_index(std::string_view code) {
-    for (std::size_t index = 0; index < std::size(kLanguages); ++index) {
-        if (kLanguages[index].code == code) {
+    const auto& languages = offline_translator::supported_languages();
+    for (std::size_t index = 0; index < languages.size(); ++index) {
+        if (languages[index].code == code) {
             return static_cast<int>(index);
         }
     }
@@ -339,16 +339,32 @@ int language_index(std::string_view code) {
 
 std::string selected_language(HWND combo) {
     const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-    if (index < 0 || index >= static_cast<LRESULT>(std::size(kLanguages))) {
+    if (index < 0 || index >= static_cast<LRESULT>(language_count())) {
         throw std::runtime_error("Не выбран язык");
     }
-    return kLanguages[static_cast<std::size_t>(index)].code;
+    return offline_translator::supported_languages()[
+        static_cast<std::size_t>(index)].code;
 }
 
 offline_translator::EngineKind selected_engine() {
-    return SendMessageW(g_engine_combo, CB_GETCURSEL, 0, 0) == 1
-        ? offline_translator::EngineKind::nllb
-        : offline_translator::EngineKind::argos;
+    const LRESULT index = SendMessageW(g_engine_combo, CB_GETCURSEL, 0, 0);
+    if (index == 2) {
+        return offline_translator::EngineKind::firefox;
+    }
+    return index == 1 ? offline_translator::EngineKind::nllb
+                      : offline_translator::EngineKind::argos;
+}
+
+int engine_combo_index(offline_translator::EngineKind kind) {
+    switch (kind) {
+        case offline_translator::EngineKind::nllb:
+            return 1;
+        case offline_translator::EngineKind::firefox:
+            return 2;
+        case offline_translator::EngineKind::argos:
+            break;
+    }
+    return 0;
 }
 
 void select_language(HWND combo, const std::string& code, int fallback) {
@@ -387,17 +403,17 @@ void post_status(HWND window, const std::string& text) {
 void fill_language_combos() {
     SendMessageW(g_source_language_combo, CB_RESETCONTENT, 0, 0);
     SendMessageW(g_target_language_combo, CB_RESETCONTENT, 0, 0);
-    for (const auto& language : kLanguages) {
+    for (const auto& name : combo_language_names()) {
         SendMessageW(
             g_source_language_combo,
             CB_ADDSTRING,
             0,
-            reinterpret_cast<LPARAM>(language.name));
+            reinterpret_cast<LPARAM>(name.c_str()));
         SendMessageW(
             g_target_language_combo,
             CB_ADDSTRING,
             0,
-            reinterpret_cast<LPARAM>(language.name));
+            reinterpret_cast<LPARAM>(name.c_str()));
     }
 }
 
@@ -405,14 +421,15 @@ void apply_settings_to_ui(const offline_translator::AppSettings& settings) {
     SendMessageW(
         g_engine_combo,
         CB_SETCURSEL,
-        settings.engine == "nllb" ? 1 : 0,
+        engine_combo_index(
+            offline_translator::engine_kind_from_settings(settings.engine)),
         0);
     fill_language_combos();
     select_language(g_source_language_combo, settings.source_language, 0);
     select_language(
         g_target_language_combo,
         settings.target_language,
-        std::size(kLanguages) > 1 ? 1 : 0);
+        language_count() > 1 ? 1 : 0);
 }
 
 void collect_window_size(HWND window, offline_translator::AppSettings& settings) {
@@ -532,13 +549,17 @@ void start_translation(HWND window) {
     const std::string target_language = selected_language(
         g_target_language_combo);
     const std::string text = to_utf8(source_text);
-    const auto root = model_root_path(engine_kind == offline_translator::EngineKind::nllb);
+    const auto root = model_root_for_kind(engine_kind);
+    const std::string engine_variant =
+        engine_kind == offline_translator::EngineKind::firefox
+            ? (g_runtime ? g_runtime->settings.architecture : std::string{"tiny"})
+            : std::string{};
     persist_settings(window);
     set_main_busy(true);
     set_status(L"Подготовка перевода...");
     auto runtime = g_runtime;
     std::thread(
-        [window, text, root, engine_kind, source_language, target_language, runtime]() {
+        [window, text, root, engine_kind, engine_variant, source_language, target_language, runtime]() {
             auto result = std::make_unique<StatusPayload>();
             try {
                 std::lock_guard lock(runtime->mutex);
@@ -546,7 +567,8 @@ void start_translation(HWND window) {
                     runtime->busy = false;
                     return;
                 }
-                auto& application = runtime->session.acquire(engine_kind, root);
+                auto& application =
+                    runtime->session.acquire(engine_kind, root, engine_variant);
                 if (!runtime->session.is_loaded()) {
                     post_status(window, "Загрузка модели...");
                 } else {
@@ -589,79 +611,175 @@ std::wstring package_status_text(const PackageRow& row) {
 }
 
 std::vector<PackageRow> collect_package_rows() {
-    std::vector<PackageRow> rows;
     const auto nllb_root = model_root_path(true);
-    offline_translator::NllbModelManager nllb(nllb_root);
-    PackageRow nllb_row;
-    nllb_row.nllb = true;
-    nllb_row.title = L"NLLB-200 Distilled 600M";
-    nllb_row.installed = nllb.is_installed();
-    nllb_row.incomplete = nllb.has_incomplete_package();
-    rows.push_back(std::move(nllb_row));
-
     const auto argos_root = model_root_path(false);
-    auto add_argos = [&](const std::string& from_code,
-                         const std::string& to_code,
-                         const std::wstring& title) {
-        offline_translator::ArgosModelManager manager(
-            argos_root,
-            from_code,
-            to_code);
+    const auto store = offline_translator::merge_store_pairs(
+        offline_translator::ArgosModelManager::available_packages(),
+        offline_translator::ArgosModelManager::installed_packages(argos_root));
+    std::vector<PackageRow> rows;
+    rows.reserve(store.size());
+    for (const auto& entry : store) {
         PackageRow row;
-        row.from_code = from_code;
-        row.to_code = to_code;
-        row.title = title;
-        row.installed = manager.is_installed();
-        row.incomplete = manager.has_incomplete_package();
+        row.nllb = entry.nllb;
+        if (entry.nllb) {
+            offline_translator::NllbModelManager manager(nllb_root);
+            row.title = L"NLLB-200 Distilled 600M";
+            row.installed = manager.is_installed();
+            row.incomplete = manager.has_incomplete_package();
+        } else {
+            row.from_code = entry.from_code;
+            row.to_code = entry.to_code;
+            offline_translator::ArgosModelManager manager(
+                argos_root,
+                entry.from_code,
+                entry.to_code);
+            row.title = L"Argos · " + from_utf8(
+                offline_translator::store_pair_label(entry));
+            row.installed = manager.is_installed();
+            row.incomplete = manager.has_incomplete_package();
+        }
+        row.installed = row.installed || entry.installed;
+        row.incomplete = row.incomplete || entry.incomplete;
         rows.push_back(std::move(row));
-    };
-    for (const auto& item :
-         offline_translator::ArgosModelManager::available_packages()) {
-        add_argos(
-            item.from_code,
-            item.to_code,
-            L"Argos " + from_utf8(item.from_code) + L" → " +
-                from_utf8(item.to_code));
     }
-    for (const auto& item :
-         offline_translator::ArgosModelManager::installed_packages(argos_root)) {
-        bool already = false;
-        for (const auto& row : rows) {
-            if (!row.nllb && row.from_code == item.from_code &&
-                row.to_code == item.to_code) {
-                already = true;
-                break;
-            }
+    if (!g_runtime ||
+        selected_engine() != offline_translator::EngineKind::firefox) {
+        return rows;
+    }
+    // Секция Firefox Translations для выбранного размера модели.
+    std::string architecture = g_runtime->settings.architecture;
+    if (!offline_translator::FirefoxModelManager::is_architecture(architecture)) {
+        architecture = "tiny";
+    }
+    const auto firefox_root = std::filesystem::path(firefox_model_root());
+    const auto catalog = offline_translator::FirefoxModelManager::available_packages(
+        firefox_root, architecture);
+    const auto installed =
+        offline_translator::FirefoxModelManager::installed_packages(firefox_root);
+    std::vector<offline_translator::StorePair> firefox_pairs;
+    std::set<std::pair<std::string, std::string>> seen;
+    for (const auto& item : installed) {
+        if (item.architecture.empty() || item.architecture == architecture) {
+            offline_translator::StorePair pair;
+            pair.from_code = item.from_code;
+            pair.to_code = item.to_code;
+            pair.installed = true;
+            firefox_pairs.push_back(pair);
+            seen.emplace(item.from_code, item.to_code);
         }
-        if (!already) {
-            add_argos(
-                item.from_code,
-                item.to_code,
-                L"Argos " + from_utf8(item.from_code) + L" → " +
-                    from_utf8(item.to_code));
+    }
+    for (const auto& item : catalog) {
+        if (seen.count({item.from_code, item.to_code}) > 0) {
+            continue;
         }
+        offline_translator::StorePair pair;
+        pair.from_code = item.from_code;
+        pair.to_code = item.to_code;
+        firefox_pairs.push_back(std::move(pair));
+    }
+    for (auto& pair : firefox_pairs) {
+        offline_translator::FirefoxModelManager manager(
+            firefox_root,
+            architecture,
+            pair.from_code,
+            pair.to_code);
+        pair.installed = pair.installed || manager.is_installed();
+        pair.incomplete = manager.has_incomplete_package();
+    }
+    offline_translator::sort_store_pairs(firefox_pairs);
+    for (const auto& pair : firefox_pairs) {
+        PackageRow row;
+        row.firefox = true;
+        row.architecture = architecture;
+        row.from_code = pair.from_code;
+        row.to_code = pair.to_code;
+        row.title = from_utf8("Firefox (" + architecture + ") · " +
+                              offline_translator::store_pair_label(pair));
+        row.installed = pair.installed;
+        row.incomplete = pair.incomplete;
+        rows.push_back(std::move(row));
     }
     return rows;
+}
+
+void update_packages_status_count() {
+    if (!g_package_status || !g_runtime) {
+        return;
+    }
+    const std::size_t shown = g_runtime->package_rows.size();
+    const std::size_t total = g_runtime->package_rows_all.size();
+    std::wstring text;
+    if (shown == total) {
+        text = L"Пакетов в списке: " + std::to_wstring(total);
+    } else {
+        text = L"Показано " + std::to_wstring(shown) + L" из " +
+            std::to_wstring(total) + L" пакетов";
+    }
+    SetWindowTextW(g_package_status, text.c_str());
+}
+
+bool package_row_matches_search(const PackageRow& row, const std::string& query) {
+    offline_translator::StorePair pair;
+    pair.nllb = row.nllb;
+    pair.from_code = row.from_code;
+    pair.to_code = row.to_code;
+    pair.installed = row.installed;
+    pair.incomplete = row.incomplete;
+    return offline_translator::store_pair_matches(pair, query);
+}
+
+std::wstring package_row_line(const PackageRow& row) {
+    std::wstring line = row.title + L" — " + package_status_text(row);
+    return line;
+}
+
+void apply_package_filter() {
+    if (!g_runtime || !g_package_list) {
+        return;
+    }
+    const std::string query =
+        g_package_search ? to_utf8(control_text(g_package_search)) : std::string();
+    g_runtime->package_rows.clear();
+    SendMessageW(g_package_list, LB_RESETCONTENT, 0, 0);
+    for (const auto& row : g_runtime->package_rows_all) {
+        if (!package_row_matches_search(row, query)) {
+            continue;
+        }
+        const std::wstring line = package_row_line(row);
+        SendMessageW(
+            g_package_list,
+            LB_ADDSTRING,
+            0,
+            reinterpret_cast<LPARAM>(line.c_str()));
+        g_runtime->package_rows.push_back(row);
+    }
+    if (!g_runtime->package_rows.empty()) {
+        SendMessageW(g_package_list, LB_SETCURSEL, 0, 0);
+    }
+    update_packages_status_count();
 }
 
 void refresh_package_list() {
     if (!g_package_list || !g_runtime) {
         return;
     }
-    g_runtime->package_rows = collect_package_rows();
-    SendMessageW(g_package_list, LB_RESETCONTENT, 0, 0);
-    for (const auto& row : g_runtime->package_rows) {
-        const std::wstring line =
-            row.title + L" — " + package_status_text(row);
+    const bool firefox_mode =
+        selected_engine() == offline_translator::EngineKind::firefox;
+    if (g_package_arch_caption) {
+        ShowWindow(g_package_arch_caption, firefox_mode ? SW_SHOW : SW_HIDE);
+    }
+    if (g_package_arch_combo) {
+        ShowWindow(g_package_arch_combo, firefox_mode ? SW_SHOW : SW_HIDE);
+        const std::string architecture =
+            g_runtime->settings.architecture == "base" ? "base" : "tiny";
         SendMessageW(
-            g_package_list,
-            LB_ADDSTRING,
-            0,
-            reinterpret_cast<LPARAM>(line.c_str()));
+            g_package_arch_combo,
+            CB_SETCURSEL,
+            architecture == "base" ? 1 : 0,
+            0);
     }
-    if (!g_runtime->package_rows.empty()) {
-        SendMessageW(g_package_list, LB_SETCURSEL, 0, 0);
-    }
+    g_runtime->package_rows_all = collect_package_rows();
+    apply_package_filter();
 }
 
 const PackageRow* selected_package_row() {
@@ -680,6 +798,8 @@ void set_packages_busy(bool busy) {
     EnableWindow(g_package_install, !busy);
     EnableWindow(g_package_uninstall, !busy);
     EnableWindow(g_package_list, !busy);
+    EnableWindow(g_package_search, !busy);
+    EnableWindow(g_package_arch_combo, !busy);
 }
 
 void start_package_job(HWND packages_window, bool install) {
@@ -719,6 +839,16 @@ void start_package_job(HWND packages_window, bool install) {
             L"Это займёт время и место на диске.",
             L"Установка NLLB",
             MB_ICONWARNING | MB_YESNO);
+        if (answer != IDYES) {
+            return;
+        }
+    }
+    if (install && row.firefox) {
+        const int answer = MessageBoxW(
+            packages_window,
+            (L"Скачать пакет Firefox Translations?\n" + row.title).c_str(),
+            L"Установка Firefox",
+            MB_ICONINFORMATION | MB_YESNO);
         if (answer != IDYES) {
             return;
         }
@@ -784,6 +914,18 @@ void start_package_job(HWND packages_window, bool install) {
             if (row.nllb) {
                 offline_translator::NllbModelManager manager(
                     model_root_path(true));
+                if (install) {
+                    manager.download_and_install(progress);
+                } else {
+                    manager.uninstall();
+                }
+            } else if (row.firefox) {
+                offline_translator::FirefoxModelManager manager(
+                    std::filesystem::path(firefox_model_root()),
+                    row.architecture.empty() ? std::string{"tiny"}
+                                             : row.architecture,
+                    row.from_code,
+                    row.to_code);
                 if (install) {
                     manager.download_and_install(progress);
                 } else {
@@ -884,6 +1026,182 @@ HICON load_tray_icon() {
         }
     }
     return create_generated_icon();
+}
+
+std::wstring find_selection_icon_path() {
+    const std::wstring exe_dir = executable_directory();
+    std::vector<std::wstring> candidates{
+        exe_dir + L"\\assets\\icon.png",
+        exe_dir + L"\\icon.png",
+    };
+    std::wstring walk = exe_dir;
+    for (int step = 0; step < 8; ++step) {
+        candidates.push_back(walk + L"\\assets\\icon.png");
+        const auto separator = walk.find_last_of(L"\\/");
+        if (separator == std::wstring::npos) {
+            break;
+        }
+        walk = walk.substr(0, separator);
+    }
+    for (const auto& path : candidates) {
+        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
+            return path;
+        }
+    }
+    return {};
+}
+
+// Повторяет _fill_clickable_disk() из selection_button.py: находит радиус
+// знака по непрозрачным пикселям и заливает прозрачные точки внутри круга
+// белым, чтобы клик в центр не проваливался сквозь layered-окно.
+void fill_clickable_disk(Gdiplus::BitmapData& data, int alpha_limit) {
+    const int width = static_cast<int>(data.Width);
+    const int height = static_cast<int>(data.Height);
+    auto* pixels = static_cast<std::uint32_t*>(data.Scan0);
+    const double center_x = (width - 1) / 2.0;
+    const double center_y = (height - 1) / 2.0;
+    double radius_sq = 0.0;
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            const std::uint32_t argb =
+                pixels[y * (data.Stride / 4) + x];
+            if (((argb >> 24) & 0xFF) < alpha_limit) {
+                continue;
+            }
+            const double dx = x - center_x;
+            const double dy = y - center_y;
+            radius_sq = std::max(radius_sq, dx * dx + dy * dy);
+        }
+    }
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            std::uint32_t& argb = pixels[y * (data.Stride / 4) + x];
+            if (((argb >> 24) & 0xFF) >= alpha_limit) {
+                continue;
+            }
+            const double dx = x - center_x;
+            const double dy = y - center_y;
+            if (dx * dx + dy * dy <= radius_sq) {
+                argb = 0xFFFFFFFF;
+            } else {
+                argb = 0;
+            }
+        }
+    }
+}
+
+// Готовит 40×40 premultiplied-DIB из assets/icon.png для
+// UpdateLayeredWindow. Возвращает true, если иконка загружена.
+bool compose_selection_icon_bitmap(HBITMAP* out_bitmap) {
+    *out_bitmap = nullptr;
+    const std::wstring path = find_selection_icon_path();
+    if (path.empty()) {
+        return false;
+    }
+    std::unique_ptr<Gdiplus::Bitmap> source(
+        Gdiplus::Bitmap::FromFile(path.c_str()));
+    if (!source || source->GetLastStatus() != Gdiplus::Ok) {
+        return false;
+    }
+    std::unique_ptr<Gdiplus::Bitmap> target(
+        new Gdiplus::Bitmap(
+            kSelectionIconSize,
+            kSelectionIconSize,
+            PixelFormat32bppPARGB));
+    if (!target || target->GetLastStatus() != Gdiplus::Ok) {
+        return false;
+    }
+    Gdiplus::Graphics graphics(target.get());
+    if (graphics.GetLastStatus() != Gdiplus::Ok) {
+        return false;
+    }
+    graphics.SetInterpolationMode(
+        Gdiplus::InterpolationModeHighQualityBicubic);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    graphics.DrawImage(
+        source.get(),
+        Gdiplus::Rect(0, 0, kSelectionIconSize, kSelectionIconSize),
+        0,
+        0,
+        source->GetWidth(),
+        source->GetHeight(),
+        Gdiplus::UnitPixel);
+    Gdiplus::Rect lock_rect(0, 0, kSelectionIconSize, kSelectionIconSize);
+    Gdiplus::BitmapData data{};
+    if (target->LockBits(
+            &lock_rect,
+            Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
+            PixelFormat32bppPARGB,
+            &data) != Gdiplus::Ok) {
+        return false;
+    }
+    fill_clickable_disk(data, 80);
+
+    HDC screen = GetDC(nullptr);
+    HDC memory = CreateCompatibleDC(screen);
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = kSelectionIconSize;
+    info.bmiHeader.biHeight = -kSelectionIconSize;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(
+        memory,
+        &info,
+        DIB_RGB_COLORS,
+        &bits,
+        nullptr,
+        0);
+    bool copied = false;
+    if (bitmap && bits) {
+        for (int y = 0; y < kSelectionIconSize; ++y) {
+            const auto* src = static_cast<const std::uint8_t*>(data.Scan0) +
+                y * data.Stride;
+            auto* dst = static_cast<std::uint8_t*>(bits) +
+                y * kSelectionIconSize * 4;
+            memcpy(dst, src, static_cast<std::size_t>(
+                kSelectionIconSize) * 4);
+        }
+        copied = true;
+    }
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    target->UnlockBits(&data);
+    if (!copied) {
+        if (bitmap) {
+            DeleteObject(bitmap);
+        }
+        return false;
+    }
+    *out_bitmap = bitmap;
+    return true;
+}
+
+// Показывает иконку как layered-окно в точке (x, y).
+bool apply_layered_icon(HWND window, HBITMAP bitmap, int x, int y) {
+    HDC screen = GetDC(nullptr);
+    HDC memory = CreateCompatibleDC(screen);
+    HGDIOBJ old = SelectObject(memory, bitmap);
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    SIZE size{kSelectionIconSize, kSelectionIconSize};
+    POINT position{x, y};
+    POINT zero{0, 0};
+    const BOOL ok = UpdateLayeredWindow(
+        window,
+        screen,
+        &position,
+        &size,
+        memory,
+        &zero,
+        0,
+        &blend,
+        ULW_ALPHA);
+    SelectObject(memory, old);
+    DeleteDC(memory);
+    ReleaseDC(nullptr, screen);
+    return ok != FALSE;
 }
 
 void add_tray_icon(HWND window) {
@@ -1076,25 +1394,182 @@ LRESULT CALLBACK result_popup_proc(
 
 void start_selection_translation(HWND main_window);
 
+HFONT create_popup_font(int point_size) {
+    HDC dc = GetDC(nullptr);
+    const int height = -MulDiv(
+        point_size,
+        GetDeviceCaps(dc, LOGPIXELSY),
+        72);
+    ReleaseDC(nullptr, dc);
+    return CreateFontW(
+        height,
+        0,
+        0,
+        0,
+        FW_NORMAL,
+        FALSE,
+        FALSE,
+        FALSE,
+        DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS,
+        CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE,
+        L"Segoe UI");
+}
+
+enum class PopupFont { header, body, button };
+
+HFONT popup_font(PopupFont kind) {
+    static HFONT header = create_popup_font(8);
+    static HFONT body = create_popup_font(11);
+    static HFONT button = create_popup_font(9);
+    switch (kind) {
+        case PopupFont::header:
+            return header;
+        case PopupFont::body:
+            return body;
+        case PopupFont::button:
+            return button;
+    }
+    return body;
+}
+
+constexpr wchar_t kHoverPropertyName[] = L"ot_hover";
+
+LRESULT CALLBACK flat_button_subclass(
+    HWND handle,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param,
+    UINT_PTR,
+    DWORD_PTR) {
+    if (message == WM_MOUSEMOVE) {
+        TRACKMOUSEEVENT track{sizeof(TRACKMOUSEEVENT), TME_LEAVE, handle, 0};
+        TrackMouseEvent(&track);
+        if (!GetPropW(handle, kHoverPropertyName)) {
+            SetPropW(handle, kHoverPropertyName, reinterpret_cast<HANDLE>(1));
+            InvalidateRect(handle, nullptr, TRUE);
+        }
+    } else if (message == WM_MOUSELEAVE) {
+        RemovePropW(handle, kHoverPropertyName);
+        InvalidateRect(handle, nullptr, TRUE);
+    } else if (message == WM_NCDESTROY) {
+        RemovePropW(handle, kHoverPropertyName);
+    }
+    return DefSubclassProc(handle, message, w_param, l_param);
+}
+
+LRESULT CALLBACK popup_edit_subclass(
+    HWND handle,
+    UINT message,
+    WPARAM w_param,
+    LPARAM l_param,
+    UINT_PTR,
+    DWORD_PTR) {
+    if (message == WM_KEYDOWN && w_param == VK_ESCAPE && g_result_popup) {
+        hide_result_popup();
+        return 0;
+    }
+    return DefSubclassProc(handle, message, w_param, l_param);
+}
+
+int popup_line_height() {
+    HDC dc = GetDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, popup_font(PopupFont::body));
+    RECT bounds{0, 0, 1000, 0};
+    DrawTextW(dc, L"Ag", -1, &bounds, DT_CALCRECT | DT_SINGLELINE);
+    SelectObject(dc, old);
+    ReleaseDC(nullptr, dc);
+    return static_cast<int>(std::max(bounds.bottom, 12L));
+}
+
+// Высота многострочного текста при переносе по ширине edit-поля.
+int measure_text_height(const std::wstring& text, int width_px) {
+    HDC dc = GetDC(nullptr);
+    HGDIOBJ old = SelectObject(dc, popup_font(PopupFont::body));
+    RECT bounds{0, 0, width_px, 0};
+    DrawTextW(
+        dc,
+        text.c_str(),
+        -1,
+        &bounds,
+        DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_EDITCONTROL);
+    SelectObject(dc, old);
+    ReleaseDC(nullptr, dc);
+    return bounds.bottom;
+}
+
+void clamp_point_to_work_area(int width, int height, int& x, int& y) {
+    POINT origin{x < 0 ? 0 : x, y < 0 ? 0 : y};
+    const HMONITOR monitor = MonitorFromPoint(origin, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO info{sizeof(MONITORINFO)};
+    if (!GetMonitorInfoW(monitor, &info)) {
+        return;
+    }
+    const RECT& area = info.rcWork;
+    if (x + width > area.right) {
+        x = area.right - width - 8;
+    }
+    if (y + height > area.bottom) {
+        y = area.bottom - height - 8;
+    }
+    if (x < area.left) {
+        x = area.left;
+    }
+    if (y < area.top) {
+        y = area.top;
+    }
+}
+
 void show_selection_button(int cursor_x, int cursor_y, HWND main_window) {
     hide_result_popup();
     hide_selection_button();
+    g_button_uses_icon = false;
+    HBITMAP icon_bitmap = nullptr;
+    const bool have_icon = compose_selection_icon_bitmap(&icon_bitmap);
     g_selection_button = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW |
+            (have_icon ? WS_EX_LAYERED : 0),
         L"OfflineTranslatorSelectionButton",
         L"Aa",
-        WS_POPUP | WS_BORDER | WS_VISIBLE,
-        cursor_x - 20,
-        cursor_y - 20,
-        40,
-        40,
+        WS_POPUP | WS_VISIBLE,
+        cursor_x - kSelectionIconSize / 2,
+        cursor_y - kSelectionIconSize / 2,
+        kSelectionIconSize,
+        kSelectionIconSize,
         main_window,
         nullptr,
         window_instance(main_window),
         nullptr);
-    if (g_selection_button) {
-        SetTimer(main_window, kSelectionButtonHideTimer, 8000, nullptr);
+    if (!g_selection_button) {
+        if (icon_bitmap) {
+            DeleteObject(icon_bitmap);
+        }
+        return;
     }
+    if (have_icon &&
+        apply_layered_icon(
+            g_selection_button,
+            icon_bitmap,
+            cursor_x - kSelectionIconSize / 2,
+            cursor_y - kSelectionIconSize / 2)) {
+        g_button_uses_icon = true;
+    } else {
+        // Фолбэк без иконки: обычное окно с рамкой и текстом «Aa».
+        SetWindowLongPtrW(
+            g_selection_button,
+            GWL_EXSTYLE,
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW);
+        SetWindowLongPtrW(
+            g_selection_button,
+            GWL_STYLE,
+            WS_POPUP | WS_BORDER | WS_VISIBLE);
+    }
+    if (icon_bitmap) {
+        DeleteObject(icon_bitmap);
+    }
+    SetTimer(main_window, kSelectionButtonHideTimer, 8000, nullptr);
 }
 
 void show_result_popup(
@@ -1109,17 +1584,42 @@ void show_result_popup(
     const bool selectable = g_runtime &&
         g_runtime->settings.result_window_mode ==
             offline_translator::kResultWindowSelectable;
+    constexpr int border = 1;
+    constexpr int pad_x = 16;
+    constexpr int pad_y = 14;
     const int width = 420;
-    const int height = selectable ? 220 : 190;
+    const int content_width = width - 2 * border - 2 * pad_x;
+
+    // Высота текстового поля: 2..12 строк с переносом, как в Python.
+    const int line_height = popup_line_height();
+    const int text_height = std::max(measure_text_height(text, content_width), line_height);
+    int visual_lines = text_height / line_height;
+    if (text_height % line_height > line_height / 3) {
+        ++visual_lines;
+    }
+    visual_lines = std::clamp(visual_lines, 2, 12);
+    const int edit_height = visual_lines * line_height + 4;
+
+    const int header_height = line_height * 8 / 10 + 6;
+    const int button_height = 28;
+    const int buttons_y = border + pad_y + header_height + 4 +
+        edit_height + 10;
+    const int client_height =
+        buttons_y + button_height + pad_y + border;
+
+    int x = cursor.x + 12;
+    int y = cursor.y + 12;
+    clamp_point_to_work_area(width, client_height, x, y);
+
     g_result_popup = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
         L"OfflineTranslatorResultPopup",
         L"Перевод",
-        WS_POPUP | WS_BORDER | WS_VISIBLE,
-        cursor.x + 12,
-        cursor.y + 12,
+        WS_POPUP | WS_VISIBLE,
+        x,
+        y,
         width,
-        height,
+        client_height,
         main_window,
         nullptr,
         window_instance(main_window),
@@ -1127,61 +1627,102 @@ void show_result_popup(
     if (!g_result_popup) {
         return;
     }
+    // Полупрозрачность 0.97, как в Python (_style_overlay_window).
+    SetLayeredWindowAttributes(g_result_popup, 0, 247, LWA_ALPHA);
+
     const std::wstring header = from_utf8(
         offline_translator::language_display_name(source_code) + " → " +
         offline_translator::language_display_name(target_code));
-    CreateWindowW(
+    const HWND header_label = CreateWindowW(
         L"STATIC",
         header.c_str(),
         WS_VISIBLE | WS_CHILD,
-        12,
-        8,
-        390,
-        18,
+        border + pad_x,
+        border + pad_y,
+        content_width,
+        header_height,
         g_result_popup,
         nullptr,
         nullptr,
         nullptr);
-    DWORD edit_style = WS_VISIBLE | WS_CHILD | WS_BORDER | ES_MULTILINE |
+    SendMessageW(
+        header_label,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(popup_font(PopupFont::header)),
+        TRUE);
+    DWORD edit_style = WS_VISIBLE | WS_CHILD | ES_MULTILINE |
         ES_AUTOVSCROLL | WS_VSCROLL | ES_READONLY;
     g_popup_result_edit = CreateWindowW(
         L"EDIT",
         text.c_str(),
         edit_style,
-        12,
-        30,
-        390,
-        110,
+        border + pad_x,
+        border + pad_y + header_height + 4,
+        content_width,
+        edit_height,
         g_result_popup,
         nullptr,
         nullptr,
         nullptr);
+    SendMessageW(
+        g_popup_result_edit,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(popup_font(PopupFont::body)),
+        TRUE);
+    SetWindowSubclass(
+        g_popup_result_edit,
+        popup_edit_subclass,
+        1,
+        0);
+    const int copy_x = width - border - pad_x - 104;
     g_popup_copy_button = CreateWindowW(
         L"BUTTON",
         L"Копировать",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-        selectable ? 210 : 300,
-        150,
-        100,
-        26,
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+        copy_x,
+        buttons_y,
+        104,
+        button_height,
         g_result_popup,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kResultCopyButton)),
         nullptr,
         nullptr);
+    SendMessageW(
+        g_popup_copy_button,
+        WM_SETFONT,
+        reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
+        TRUE);
+    SetWindowSubclass(
+        g_popup_copy_button,
+        flat_button_subclass,
+        1,
+        0);
     if (selectable) {
-        CreateWindowW(
+        const int close_x = copy_x - 84 - 8;
+        const HWND close_button = CreateWindowW(
             L"BUTTON",
             L"Закрыть",
-            WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
-            318,
-            150,
+            WS_VISIBLE | WS_CHILD | BS_OWNERDRAW,
+            close_x,
+            buttons_y,
             84,
-            26,
+            button_height,
             g_result_popup,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kResultCloseButton)),
             nullptr,
             nullptr);
+        SendMessageW(
+            close_button,
+            WM_SETFONT,
+            reinterpret_cast<WPARAM>(popup_font(PopupFont::button)),
+            TRUE);
+        SetWindowSubclass(
+            close_button,
+            flat_button_subclass,
+            1,
+            0);
     }
+    SetFocus(g_popup_result_edit);
 }
 
 void start_selection_translation(HWND main_window) {
@@ -1200,10 +1741,13 @@ void start_selection_translation(HWND main_window) {
     const std::string text = to_utf8(selected);
     const auto direction = offline_translator::choose_selection_direction(text);
     const auto engine_kind = selected_engine();
-    const auto root = model_root_path(
-        engine_kind == offline_translator::EngineKind::nllb);
+    const auto root = model_root_for_kind(engine_kind);
+    const std::string engine_variant =
+        engine_kind == offline_translator::EngineKind::firefox
+            ? (g_runtime ? g_runtime->settings.architecture : std::string{"tiny"})
+            : std::string{};
     auto runtime = g_runtime;
-    std::thread([main_window, text, direction, engine_kind, root, runtime]() {
+    std::thread([main_window, text, direction, engine_kind, engine_variant, root, runtime]() {
         auto result = std::make_unique<StatusPayload>();
         try {
             std::lock_guard lock(runtime->mutex);
@@ -1211,7 +1755,8 @@ void start_selection_translation(HWND main_window) {
                 runtime->selection_busy = false;
                 return;
             }
-            auto& application = runtime->session.acquire(engine_kind, root);
+            auto& application =
+                runtime->session.acquire(engine_kind, root, engine_variant);
             result->text = from_utf8(
                 application.translate(text, direction.first, direction.second)
                     .text);
@@ -1443,12 +1988,26 @@ LRESULT CALLBACK result_popup_proc(
     if (message == WM_COMMAND) {
         const int id = LOWORD(w_param);
         if (id == kResultCopyButton) {
+            // Как в Python: копирует выделение, если оно есть,
+            // иначе весь перевод.
+            DWORD selection_start = 0;
+            DWORD selection_end = 0;
+            SendMessageW(
+                g_popup_result_edit,
+                EM_GETSEL,
+                reinterpret_cast<WPARAM>(&selection_start),
+                reinterpret_cast<LPARAM>(&selection_end));
             const std::wstring text = g_popup_result_edit
                 ? control_text(g_popup_result_edit)
                 : std::wstring{};
+            std::wstring copy = text;
+            if (selection_end > selection_start &&
+                selection_end <= text.size()) {
+                copy = text.substr(selection_start, selection_end - selection_start);
+            }
             try {
                 offline_translator::Win32Clipboard clipboard(window);
-                clipboard.set_text(text);
+                clipboard.set_text(copy);
             } catch (const std::exception&) {
             }
             return 0;
@@ -1457,6 +2016,61 @@ LRESULT CALLBACK result_popup_proc(
             hide_result_popup();
             return 0;
         }
+    }
+    if (message == WM_DRAWITEM) {
+        auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+        if (draw && draw->CtlType == ODT_BUTTON) {
+            const bool hovered =
+                GetPropW(draw->hwndItem, kHoverPropertyName) != nullptr;
+            HBRUSH brush = CreateSolidBrush(
+                hovered ? kButtonHover : kButtonFace);
+            FillRect(draw->hDC, &draw->rcItem, brush);
+            DeleteObject(brush);
+            SetBkMode(draw->hDC, TRANSPARENT);
+            SetTextColor(draw->hDC, RGB(0, 0, 0));
+            SelectObject(draw->hDC, popup_font(PopupFont::button));
+            wchar_t label[64]{};
+            GetWindowTextW(draw->hwndItem, label, 64);
+            DrawTextW(
+                draw->hDC,
+                label,
+                -1,
+                &draw->rcItem,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            return TRUE;
+        }
+    }
+    if (message == WM_ERASEBKGND) {
+        RECT client{};
+        GetClientRect(window, &client);
+        HDC dc = reinterpret_cast<HDC>(w_param);
+        // Рамка 1px + панель #f2f2f2, как трюк Python с чёрной подложкой.
+        HBRUSH border_brush = CreateSolidBrush(kPopupBorder);
+        FillRect(dc, &client, border_brush);
+        DeleteObject(border_brush);
+        RECT inner = client;
+        InflateRect(&inner, -1, -1);
+        HBRUSH panel_brush = CreateSolidBrush(kPopupBackground);
+        FillRect(dc, &inner, panel_brush);
+        DeleteObject(panel_brush);
+        return 1;
+    }
+    if (message == WM_CTLCOLORSTATIC) {
+        const HDC dc = reinterpret_cast<HDC>(w_param);
+        SetBkColor(dc, kPopupBackground);
+        // Заголовок приглушённый #333333, текст перевода чёрный.
+        if (reinterpret_cast<HWND>(l_param) == g_popup_result_edit) {
+            SetTextColor(dc, RGB(0, 0, 0));
+        } else {
+            SetTextColor(dc, kPopupHeaderText);
+        }
+        static HBRUSH background =
+            CreateSolidBrush(kPopupBackground);
+        return reinterpret_cast<LRESULT>(background);
+    }
+    if (message == WM_KEYDOWN && w_param == VK_ESCAPE) {
+        hide_result_popup();
+        return 0;
     }
     if (message == WM_LBUTTONUP && click_to_close) {
         hide_result_popup();
@@ -1813,6 +2427,11 @@ void create_main_controls(HWND window) {
         CB_ADDSTRING,
         0,
         reinterpret_cast<LPARAM>(L"NLLB-200"));
+    SendMessageW(
+        g_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"Firefox"));
     SendMessageW(g_engine_combo, CB_SETCURSEL, 0, 0);
     g_packages_button = CreateWindowW(
         L"BUTTON",
@@ -1982,15 +2601,81 @@ LRESULT CALLBACK packages_proc(
                 nullptr,
                 nullptr,
                 nullptr);
+            CreateWindowW(
+                L"STATIC",
+                L"Поиск:",
+                WS_VISIBLE | WS_CHILD,
+                16,
+                40,
+                48,
+                20,
+                window,
+                nullptr,
+                nullptr,
+                nullptr);
+            g_package_search = CreateWindowW(
+                L"EDIT",
+                nullptr,
+                WS_VISIBLE | WS_CHILD | WS_BORDER | WS_TABSTOP |
+                    ES_AUTOHSCROLL,
+                68,
+                36,
+                398,
+                24,
+                window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kPackageSearchEdit)),
+                nullptr,
+                nullptr);
+            SendMessageW(
+                g_package_search,
+                WM_SETFONT,
+                reinterpret_cast<WPARAM>(
+                    GetStockObject(DEFAULT_GUI_FONT)),
+                TRUE);
+            SendMessageW(
+                g_package_search,
+                EM_SETCUEBANNER,
+                TRUE,
+                reinterpret_cast<LPARAM>(L"код или язык: ru, немецкий..."));
+            g_package_arch_caption = CreateWindowW(
+                L"STATIC",
+                L"Размер моделей:",
+                WS_CHILD,  // показывается только для движка Firefox
+                250,
+                15,
+                110,
+                20,
+                window,
+                nullptr,
+                nullptr,
+                nullptr);
+            g_package_arch_combo = CreateWindowW(
+                L"COMBOBOX",
+                nullptr,
+                WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+                364,
+                11,
+                120,
+                160,
+                window,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(
+                    kPackageArchCombo)),
+                nullptr,
+                nullptr);
+            SendMessageW(g_package_arch_combo, CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(L"tiny"));
+            SendMessageW(g_package_arch_combo, CB_ADDSTRING, 0,
+                         reinterpret_cast<LPARAM>(L"base"));
             g_package_list = CreateWindowW(
                 L"LISTBOX",
                 nullptr,
                 WS_VISIBLE | WS_CHILD | WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
-                    WS_TABSTOP,
+                    WS_TABSTOP | LBS_NOINTEGRALHEIGHT,
                 16,
-                36,
+                66,
                 450,
-                210,
+                206,
                 window,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(kPackageList)),
                 nullptr,
@@ -2000,7 +2685,7 @@ LRESULT CALLBACK packages_proc(
                 L"",
                 WS_VISIBLE | WS_CHILD | SS_LEFT,
                 16,
-                250,
+                276,
                 450,
                 22,
                 window,
@@ -2012,7 +2697,7 @@ LRESULT CALLBACK packages_proc(
                 L"Установить",
                 WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
                 16,
-                280,
+                306,
                 120,
                 30,
                 window,
@@ -2025,7 +2710,7 @@ LRESULT CALLBACK packages_proc(
                 L"Удалить",
                 WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
                 148,
-                280,
+                306,
                 120,
                 30,
                 window,
@@ -2038,7 +2723,7 @@ LRESULT CALLBACK packages_proc(
                 L"Закрыть",
                 WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
                 346,
-                280,
+                306,
                 120,
                 30,
                 window,
@@ -2064,17 +2749,15 @@ LRESULT CALLBACK packages_proc(
                 return 0;
             }
             refresh_package_list();
-            if (g_package_status) {
-                const std::wstring text =
-                    L"Пакетов в списке: " +
-                    std::to_wstring(g_runtime->package_rows.size());
-                SetWindowTextW(g_package_status, text.c_str());
+            if (g_package_status && !g_runtime->packages_busy) {
+                update_packages_status_count();
             }
             static_cast<void>(payload);
             return 0;
         }
         if (message == WM_COMMAND) {
             const int id = LOWORD(w_param);
+            const int notification = HIWORD(w_param);
             if (id == kPackageCloseButton) {
                 close_packages_window();
                 return 0;
@@ -2086,6 +2769,24 @@ LRESULT CALLBACK packages_proc(
             if (id == kPackageUninstallButton) {
                 start_package_job(window, false);
                 return 0;
+            }
+            if (id == kPackageSearchEdit &&
+                notification == EN_CHANGE &&
+                !g_runtime->packages_busy) {
+                apply_package_filter();
+            }
+            if (id == kPackageArchCombo &&
+                notification == CBN_SELCHANGE && g_runtime) {
+                const LRESULT arch =
+                    SendMessageW(g_package_arch_combo, CB_GETCURSEL, 0, 0);
+                g_runtime->settings.architecture = arch == 1 ? "base" : "tiny";
+                try {
+                    if (!g_smoke_mode) {
+                        offline_translator::save_settings(g_runtime->settings);
+                    }
+                } catch (const std::exception&) {
+                }
+                refresh_package_list();
             }
         }
         if (message == kPackageProgressMessage) {
@@ -2130,6 +2831,9 @@ LRESULT CALLBACK packages_proc(
             g_package_install = nullptr;
             g_package_uninstall = nullptr;
             g_package_status = nullptr;
+            g_package_search = nullptr;
+            g_package_arch_caption = nullptr;
+            g_package_arch_combo = nullptr;
             if (g_runtime && g_runtime->packages_window == window) {
                 g_runtime->packages_window = nullptr;
             }
@@ -2158,7 +2862,7 @@ void open_packages_window(HWND parent, HINSTANCE instance) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         500,
-        370,
+        400,
         parent,
         nullptr,
         instance,
@@ -2405,6 +3109,67 @@ int run_smoke_loop(HWND window) {
     return 0;
 }
 
+// Smoke-проверка попапов выделения: кнопка с иконкой и окно результата
+// в обоих режимах. Не трогает автозагрузку и треи.
+int run_popup_smoke_loop(HWND window) {
+    MSG message{};
+    auto pump = [&message](int iterations) {
+        for (int step = 0; step < iterations; ++step) {
+            while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.message == WM_QUIT) {
+                    return false;
+                }
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            Sleep(10);
+        }
+        return true;
+    };
+
+    show_selection_button(120, 120, window);
+    if (!IsWindow(g_selection_button)) {
+        return 1;
+    }
+    if (!pump(10)) {
+        return static_cast<int>(message.wParam);
+    }
+    hide_selection_button();
+
+    g_runtime->settings.result_window_mode =
+        offline_translator::kResultWindowSelectable;
+    show_result_popup(window, L"Проверка перевода", "ru", "en");
+    if (!IsWindow(g_result_popup) || !g_popup_result_edit ||
+        !g_popup_copy_button) {
+        return 1;
+    }
+    RECT popup_bounds{};
+    GetWindowRect(g_result_popup, &popup_bounds);
+    // Высота должна подстраиваться под короткий текст (2 строки минимум).
+    const int selectable_height = popup_bounds.bottom - popup_bounds.top;
+    if (selectable_height <= 60 || selectable_height > 400) {
+        return 1;
+    }
+    if (!pump(10)) {
+        return static_cast<int>(message.wParam);
+    }
+    hide_result_popup();
+
+    g_runtime->settings.result_window_mode =
+        offline_translator::kResultWindowClickToClose;
+    show_result_popup(window, L"Второй режим", "en", "ru");
+    if (!IsWindow(g_result_popup) || !g_popup_copy_button) {
+        return 1;
+    }
+    pump(10);
+    hide_result_popup();
+    if (IsWindow(g_result_popup) || IsWindow(g_selection_button)) {
+        return 1;
+    }
+    DestroyWindow(window);
+    return 0;
+}
+
 }  // анонимное пространство имён
 
 int WINAPI wWinMain(
@@ -2519,7 +3284,23 @@ int WINAPI wWinMain(
             L"Предупреждение",
             MB_ICONWARNING | MB_OK);
     }
+    Gdiplus::GdiplusStartupInput gdiplus_input{};
+    ULONG_PTR gdiplus_token = 0;
+    const bool gdiplus_ready =
+        Gdiplus::GdiplusStartup(&gdiplus_token, &gdiplus_input, nullptr) ==
+        Gdiplus::Ok;
+    if (command_has_flag(command_line, L"--smoke-popup") ||
+        command_has_flag(GetCommandLineW(), L"--smoke-popup")) {
+        const int result = run_popup_smoke_loop(window);
+        if (gdiplus_ready) {
+            Gdiplus::GdiplusShutdown(gdiplus_token);
+        }
+        return result;
+    }
     if (g_smoke_mode) {
+        if (gdiplus_ready) {
+            Gdiplus::GdiplusShutdown(gdiplus_token);
+        }
         return run_smoke_loop(window);
     }
     add_tray_icon(window);
@@ -2534,6 +3315,9 @@ int WINAPI wWinMain(
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
         DispatchMessageW(&message);
+    }
+    if (gdiplus_ready) {
+        Gdiplus::GdiplusShutdown(gdiplus_token);
     }
     return static_cast<int>(message.wParam);
 }

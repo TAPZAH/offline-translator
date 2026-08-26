@@ -24,6 +24,8 @@ struct AppSettings {
     bool double_ctrl_c_translation{false};
     std::string result_window_mode{"click_to_close"};
     std::string translate_hotkey{"Ctrl+Shift+T"};
+    // Размер моделей Firefox Translations: tiny | base (как в Python).
+    std::string architecture{"tiny"};
 };
 
 std::filesystem::path default_data_root();

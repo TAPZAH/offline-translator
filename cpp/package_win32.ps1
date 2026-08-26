@@ -264,12 +264,36 @@ try {
     foreach ($name in @("libprotobuf.dll", "abseil_dll.dll")) {
         Copy-RuntimeDll $name $releaseDir $vcpkgBin $OutputDir
     }
+    # oneDNN — int8-бэкенд CTranslate2 для NLLB.
+    foreach ($candidate in @(
+        (Join-Path $releaseDir "dnnl.dll"),
+        "C:\deps\oneDNN\install\bin\dnnl.dll"
+    )) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            Copy-RequiredFile $candidate $OutputDir
+            break
+        }
+    }
+    # zlib/zstd — распаковка моделей Firefox; fxbridge — движок Firefox.
+    foreach ($name in @("z.dll", "zstd.dll", "fxbridge.dll")) {
+        if (Test-Path -LiteralPath (Join-Path $releaseDir $name) -PathType Leaf) {
+            Copy-RequiredFile (Join-Path $releaseDir $name) $OutputDir
+        } else {
+            Write-Warning "Нет $name рядом со сборкой — часть функций может не работать"
+        }
+    }
     Copy-VcRedistDlls -TargetDirectory $OutputDir
 
     $assetsDir = Join-Path $OutputDir "assets"
     New-Item -ItemType Directory -Path $assetsDir | Out-Null
     $iconSource = Join-Path $PSScriptRoot "..\assets\app.ico"
     Copy-RequiredFile $iconSource $assetsDir
+    $selectionIconSource = Join-Path $PSScriptRoot "..\assets\icon.png"
+    if (Test-Path -LiteralPath $selectionIconSource -PathType Leaf) {
+        Copy-RequiredFile $selectionIconSource $assetsDir
+    } else {
+        Write-Warning "Нет assets/icon.png — кнопка выделения будет без иконки"
+    }
 
     $dataDir = Join-Path $OutputDir "data"
     Write-DataPlaceholder -DataDir $dataDir -MigrateSettings:$MigrateSettings

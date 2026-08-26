@@ -12,6 +12,7 @@ namespace offline_translator {
 enum class EngineKind {
     argos,
     nllb,
+    firefox,
 };
 
 class TranslationApplication {
@@ -19,6 +20,11 @@ public:
     TranslationApplication(
         EngineKind engine_kind,
         std::filesystem::path models_root);
+    // Вариант движка: для firefox — размер модели (tiny/base).
+    TranslationApplication(
+        EngineKind engine_kind,
+        std::filesystem::path models_root,
+        std::string engine_variant);
     ~TranslationApplication();
 
     TranslationApplication(const TranslationApplication&) = delete;
@@ -46,12 +52,13 @@ private:
     std::unique_ptr<State> state_;
 };
 
-// Долгоживущая сессия: одно приложение на движок и корень моделей.
+// Долгоживущая сессия: одно приложение на движок, корень моделей и вариант.
 class TranslationSession {
 public:
     TranslationApplication& acquire(
         EngineKind engine_kind,
-        const std::filesystem::path& models_root);
+        const std::filesystem::path& models_root,
+        const std::string& engine_variant = {});
     void reset();
     TranslationApplication* get() noexcept;
     const TranslationApplication* get() const noexcept;
@@ -62,6 +69,7 @@ private:
     std::unique_ptr<TranslationApplication> application_;
     EngineKind engine_kind_{EngineKind::argos};
     std::filesystem::path models_root_;
+    std::string engine_variant_;
     bool loaded_{false};
 };
 

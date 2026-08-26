@@ -33,6 +33,19 @@ if (ENABLE_CTRANSLATE2)
     get_target_property(_ctranslate2_dll
         CTranslate2::ctranslate2 IMPORTED_LOCATION_RELEASE)
     message(STATUS "CTranslate2 DLL: ${_ctranslate2_dll}")
+    # oneDNN рядом с этой сборкой CTranslate2 даёт эффективный int8 для NLLB.
+    if (NOT DNNL_DLL)
+        get_filename_component(_ct2_install_root
+            "${_ctranslate2_dll}" DIRECTORY)
+        find_file(DNNL_DLL NAMES dnnl.dll
+            PATHS "${_ct2_install_root}"
+                  "${CTranslate2_ROOT}/build-openblas-dnnl/install/bin"
+                  "C:/deps/oneDNN/install/bin"
+            NO_DEFAULT_PATH)
+    endif()
+    if (DNNL_DLL)
+        message(STATUS "DNNL DLL: ${DNNL_DLL}")
+    endif()
     set_property(TARGET CTranslate2::ctranslate2
         PROPERTY MAP_IMPORTED_CONFIG_DEBUG Release
     )
@@ -68,9 +81,13 @@ add_library(offline_translator_core
     src/argos_model_manager.cpp
     src/autostart.cpp
     src/clipboard.cpp
+    src/compression.cpp
     src/file_transfer.cpp
+    src/firefox_engine.cpp
+    src/firefox_model_manager.cpp
     src/fs_utils.cpp
     src/hotkey.cpp
+    src/language_store.cpp
     src/nllb_model_manager.cpp
     src/nllb_language.cpp
     src/nllb_engine.cpp
@@ -82,6 +99,25 @@ add_library(offline_translator_core
     src/window_policy.cpp
     src/zip_archive.cpp
 )
+
+find_package(ZLIB REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+target_link_libraries(offline_translator_core
+    PUBLIC nlohmann_json::nlohmann_json
+    PRIVATE ZLIB::ZLIB zstd::libzstd
+)
+# DLL для деплоя: zlib из импортной цели, zstd — интерфейсная, ищем файлом.
+set(_manifest_bin "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
+get_target_property(_zlib_dll ZLIB::ZLIB IMPORTED_LOCATION_RELEASE)
+if (NOT _zlib_dll)
+    get_target_property(_zlib_dll ZLIB::ZLIB IMPORTED_LOCATION)
+endif()
+find_file(ZSTD_DLL NAMES zstd.dll libzstd.dll PATHS "${_manifest_bin}" NO_DEFAULT_PATH)
+find_file(ZLIB_RUNTIME_DLL NAMES z.dll zlib1.dll PATHS "${_manifest_bin}" NO_DEFAULT_PATH)
+if (NOT ZLIB_RUNTIME_DLL)
+    set(ZLIB_RUNTIME_DLL "${_zlib_dll}")
+endif()
+message(STATUS "zlib DLL: ${ZLIB_RUNTIME_DLL}; zstd DLL: ${ZSTD_DLL}")
 
 if (ENABLE_CTRANSLATE2)
     target_sources(offline_translator_core
@@ -103,6 +139,9 @@ if (ENABLE_CTRANSLATE2)
     add_executable(translator_cli
         tools/translator_cli.cpp
     )
+    add_executable(firefox_smoke
+        tools/firefox_smoke.cpp
+    )
     if (WIN32)
         add_executable(offline_translator_win32 WIN32
             app/win32_main.cpp
@@ -121,6 +160,14 @@ if (ENABLE_CTRANSLATE2)
     target_include_directories(translator_cli
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_include_directories(firefox_smoke
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(firefox_smoke
+        PRIVATE
+            offline_translator_core
     )
     if (WIN32)
         target_include_directories(offline_translator_win32
@@ -196,6 +243,31 @@ if (ENABLE_CTRANSLATE2)
                 COMMENT "Копирование assets/app.ico рядом с GUI"
             )
         endif()
+        set(_fxbridge_dll "${CMAKE_CURRENT_SOURCE_DIR}/fxbridge/target/release/fxbridge.dll")
+        if (EXISTS "${_fxbridge_dll}")
+            foreach (_bridge_target IN ITEMS
+                offline_translator_win32
+                firefox_smoke
+            )
+                add_custom_command(TARGET ${_bridge_target} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${_fxbridge_dll}"
+                        "$<TARGET_FILE_DIR:${_bridge_target}>/fxbridge.dll"
+                    COMMENT "Копирование fxbridge.dll рядом с ${_bridge_target}"
+                )
+            endforeach()
+        endif()
+        set(_selection_png "${CMAKE_CURRENT_SOURCE_DIR}/../assets/icon.png")
+        if (EXISTS "${_selection_png}")
+            add_custom_command(TARGET offline_translator_win32 POST_BUILD
+                COMMAND "${CMAKE_COMMAND}" -E make_directory
+                    "$<TARGET_FILE_DIR:offline_translator_win32>/assets"
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${_selection_png}"
+                    "$<TARGET_FILE_DIR:offline_translator_win32>/assets/icon.png"
+                COMMENT "Копирование assets/icon.png рядом с GUI"
+            )
+        endif()
     endif()
 endif()
 
@@ -203,6 +275,9 @@ target_include_directories(offline_translator_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+set(OT_ZLIB_DLL_PATH "${_zlib_dll}" CACHE INTERNAL "zlib runtime dll")
+set(OT_ZSTD_DLL_PATH "${ZSTD_DLL}" CACHE INTERNAL "zstd runtime dll")
 
 target_link_libraries(offline_translator_core
     PUBLIC
@@ -279,7 +354,7 @@ add_executable(integration_tests
     tests/integration_tests.cpp
 )
 
-target_link_libraries(core_tests PRIVATE offline_translator_core)
+target_link_libraries(core_tests PRIVATE offline_translator_core ZLIB::ZLIB zstd::libzstd)
 target_link_libraries(integration_tests PRIVATE offline_translator_core)
 target_include_directories(core_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -307,6 +382,7 @@ if (ENABLE_CTRANSLATE2 AND WIN32)
         nllb_smoke
         argos_smoke
         translator_cli
+        firefox_smoke
         offline_translator_win32
         core_tests
         integration_tests
@@ -356,11 +432,25 @@ if (ENABLE_CTRANSLATE2 AND WIN32 AND TARGET nllb_smoke)
             set_tests_properties(argos_cli_smoke PROPERTIES TIMEOUT 30)
         endif()
     endif()
+    set(FIREFOX_MODELS_ROOT
+        "$ENV{USERPROFILE}/.local/share/offline-translator/firefox-models")
+    if (TARGET firefox_smoke AND EXISTS "${FIREFOX_MODELS_ROOT}/base/en-ru/model.bin")
+        add_test(
+            NAME firefox_cli_smoke
+            COMMAND firefox_smoke "${FIREFOX_MODELS_ROOT}"
+        )
+        set_tests_properties(firefox_cli_smoke PROPERTIES TIMEOUT 60)
+    endif()
     if (TARGET offline_translator_win32)
         add_test(
             NAME win32_gui_smoke
             COMMAND offline_translator_win32 --smoke-start
         )
         set_tests_properties(win32_gui_smoke PROPERTIES TIMEOUT 15)
+        add_test(
+            NAME win32_popup_smoke
+            COMMAND offline_translator_win32 --smoke-popup
+        )
+        set_tests_properties(win32_popup_smoke PROPERTIES TIMEOUT 15)
     endif()
 endif()

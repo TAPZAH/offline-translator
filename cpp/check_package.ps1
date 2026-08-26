@@ -103,7 +103,7 @@ function Get-SystemDllNames {
         "uxtheme.dll", "dwmapi.dll", "setupapi.dll", "cfgmgr32.dll", "powrprof.dll",
         "iphlpapi.dll", "normaliz.dll", "nsi.dll", "dnsapi.dll", "mswsock.dll",
         "sspicli.dll", "userenv.dll", "profapi.dll", "version.dll", "winmm.dll",
-        "msvcrt.dll", "ucrtbase.dll", "ninput.dll", "win32u.dll"
+        "msvcrt.dll", "ucrtbase.dll", "ninput.dll", "win32u.dll", "gdiplus.dll"
     )
 }
 

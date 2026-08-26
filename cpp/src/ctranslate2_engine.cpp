@@ -16,15 +16,30 @@ namespace offline_translator {
 
 class CTranslate2State {
 public:
-    CTranslate2State(const std::string& model_path, bool nllb_model)
-        : translator(
-              model_path,
-              ctranslate2::Device::CPU,
-              ctranslate2::ComputeType::AUTO) {
-        static_cast<void>(nllb_model);
+    CTranslate2State(const std::string& model_path, bool nllb_model) {
+        // Как в Python: NLLB использует int8. На сборках CTranslate2 без
+        // эффективного int8 (OpenBLAS без oneDNN) откатываемся на AUTO.
+        if (nllb_model) {
+            try {
+                translator = create(model_path, ctranslate2::ComputeType::INT8);
+                return;
+            } catch (const std::exception&) {
+            }
+        }
+        translator = create(model_path, ctranslate2::ComputeType::AUTO);
     }
 
-    ctranslate2::Translator translator;
+    std::unique_ptr<ctranslate2::Translator> translator;
+
+private:
+    static std::unique_ptr<ctranslate2::Translator> create(
+        const std::string& model_path,
+        ctranslate2::ComputeType compute_type) {
+        return std::make_unique<ctranslate2::Translator>(
+            model_path,
+            ctranslate2::Device::CPU,
+            compute_type);
+    }
 };
 
 CTranslate2Engine::CTranslate2Engine(
@@ -146,7 +161,7 @@ std::string CTranslate2Engine::translate_direct(
     if (nllb_model_) {
         options.max_decoding_length = 512;
     }
-    const auto results = state_->translator.translate_batch(
+    const auto results = state_->translator->translate_batch(
         batch,
         prefixes.empty() ? std::vector<std::vector<std::string>>{} : prefixes,
         options);

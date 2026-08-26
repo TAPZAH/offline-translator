@@ -15,11 +15,22 @@
 - `ctranslate2_engine.*` — CPU-адаптер CTranslate2;
 - `argos_engine.*` — движок Argos с кэшированием переводчиков по парам;
 - `nllb_engine.*` — движок NLLB с ленивой загрузкой общей модели;
+- `firefox_engine.*` — движок Firefox Translations: нативный Rust-движок
+  `fxtranslate` через C-ABI мост `fxbridge.dll` (кэш по парам, pivot en);
+- `fxbridge/` — Rust-cdylib мост к fxtranslate (`cargo build --release`);
+  экспортирует fxt_engine_create / fxt_translate[_long] / fxt_last_error;
+- `compression.*` — gunzip/zstd для скачиваемых моделей Firefox;
+- `firefox_model_manager.*` — каталог GitHub/GCS, докачка, staging,
+  раскладка `<root>/<arch>/<from>-<to>` как в Python;
 - `sentencepiece_tokenizer.*` — RAII-обёртка SentencePiece;
 - `nllb_model_manager.*` и `argos_model_manager.*` — обнаружение,
   каталог, staging-загрузка, проверка и удаление моделей;
 - `app_settings.*` — чтение/запись `settings.json` (движок, языки, размер окна,
   горячая клавиша, флаги попапа выделения);
+- `language_store.*` — единая таблица 56 языков с русскими названиями,
+  слияние каталога Argos с установленными пакетами, сортировка
+  (установленные → пары с ru/en → коды) и регистронезависимый поиск
+  по кодам и названиям;
 - `hotkey.*` — разбор строк вроде `Ctrl+Shift+T`;
 - `clipboard.*` — захват выделения с восстановлением буфера обмена;
 - `autostart.*` — HKCU `\Software\Microsoft\Windows\CurrentVersion\Run`;
@@ -85,12 +96,18 @@ CTranslate2 собирается отдельно из upstream-исходник
 
 ## Поддерживаемая конфигурация CTranslate2
 
-Рабочий CPU-инференс — сборка **OpenBLAS + OpenMP компилятора**:
+Рабочий CPU-инференс — сборка **OpenBLAS + oneDNN + OpenMP компилятора**:
 
-- каталог: `C:\deps\CTranslate2\build-openblas`
-- CMake CTranslate2: `-DWITH_OPENBLAS=ON -DOPENMP_RUNTIME=COMP`
-- runtime: `ctranslate2.dll` зависит от `openblas.dll` и `VCOMP140.DLL`
+- каталог: `C:\deps\CTranslate2\build-openblas-dnnl`
+  (`-DWITH_OPENBLAS=ON -DWITH_DNNL=ON -DWITH_MKL=OFF -DOPENMP_RUNTIME=COMP`,
+  oneDNN: `C:\deps\oneDNN\install`);
+- runtime: `ctranslate2.dll` зависит от `openblas.dll`, `dnnl.dll` и
+  `VCOMP140.DLL`;
+- NLLB работает в `int8` (как Python); адаптер молча откатывается на
+  AUTO, если INT8 недоступен. Скорость smoke: ~1 c вместо ~10-16 c.
 
+Сборка только с OpenBLAS (`build-openblas`) продолжает работать: INT8
+заменяется на AUTO, но формулировки NLLB могут отличаться от Python.
 Сборка `build-openblas-noomp` (`OPENMP_RUNTIME=NONE`) **не поддерживается**
 для NLLB: CTranslate2 тогда использует `BS::thread_pool`
 (`src/cpu/parallel.cc`), а OpenBLAS — свой пул потоков. Совместно они
@@ -239,7 +256,8 @@ Python-упаковка (`build_portable.py`, `OfflineTranslator.iss`) не ме
 В portable-режиме GUI сначала использует модели из папки `data` рядом с exe,
 а при её отсутствии — пользовательские каталоги моделей.
 
-Win32 GUI показывает полный каталог из 56 языков NLLB-200 для обоих движков.
+Win32 GUI показывает полный каталог из 56 языков NLLB-200 с русскими
+названиями (`language_store`) для обоих движков.
 Для Argos конкретная пара должна быть установлена локально; каталог языков
 не означает автоматическую загрузку пакета.
 
@@ -265,7 +283,9 @@ Win32 GUI показывает полный каталог из 56 языков 
 Окно «Пакеты» показывает NLLB и пары Argos из кэша `argospm-index` (и
 уже установленные). При открытии индекс обновляется в фоне; без сети
 остаются кэш или встроенные `en↔ru`. Прогресс установки идёт через
-`PostMessage`. Удаление NLLB требует подтверждения.
+`PostMessage`. Удаление NLLB требует подтверждения. Строка «Поиск»
+фильтрует список по кодам и русским названиям без учёта регистра
+(`ru`, `немецкий`, `600m`...); статус показывает «Показано N из M».
 
 ## Трей, выделение, автозапуск
 
@@ -283,6 +303,15 @@ WM_CLOSE вызывает DestroyWindow.
 Выделение: после жеста мыши или горячей клавиши текст копируется через
 SendInput Ctrl+C, затем прежний буфер обмена восстанавливается. Перевод
 идёт в фоне, результат — маленькое окно у курсора.
+
+Кнопка выделения рисует `assets/icon.png` через GDI+
+(`UpdateLayeredWindow`, 40×40, кликабельный диск как в Python,
+фолбэк «Aa» без файла). Окно результата: палитра и шрифты Python
+(Segoe UI, #f2f2f2/#dedede/#ccc/#333), полупрозрачность 0.97, рамка 1px,
+высота под текст (2..12 строк), плоские кнопки с hover, Escape закрывает,
+«Копировать» берёт выделение если оно есть; позиция прижимается к экрану.
+Проверка без участия пользователя: `--smoke-popup` (ctest
+`win32_popup_smoke`).
 
 Автозагрузка текущего пользователя: значение `OfflineTranslator` в
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, команда

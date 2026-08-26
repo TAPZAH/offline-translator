@@ -2,7 +2,9 @@
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
+#include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
+#include "offline_translator/language_store.hpp"
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/selection.hpp"
@@ -10,9 +12,11 @@
 #include "offline_translator/translation_service.hpp"
 #include "offline_translator/window_policy.hpp"
 #include "file_transfer.hpp"
+#include "compression.hpp"
 #include "fs_utils.hpp"
 #include "zip_archive.hpp"
 
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <filesystem>
@@ -24,6 +28,10 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include <zconf.h>
+#include <zlib.h>
+#include <zstd.h>
 
 using namespace offline_translator;
 
@@ -512,6 +520,234 @@ int main() {
         require(!installed.empty(), "список установленных Argos не пуст");
         manager.uninstall();
         std::filesystem::remove_all(source_pkg.parent_path());
+    }
+    {
+        const auto& languages = supported_languages();
+        require(languages.size() == 56, "таблица языков: 56 записей");
+        std::set<std::string> unique_codes;
+        for (const auto& entry : languages) {
+            unique_codes.insert(entry.code);
+            require(
+                !entry.name.empty() && entry.name != entry.code,
+                "у языка " + entry.code + " есть русское название");
+        }
+        require(unique_codes.size() == languages.size(), "коды языков уникальны");
+        require(language_store_name("en") == "Английский", "имя en");
+        require(language_store_name("ru") == "Русский", "имя ru");
+        require(
+            language_store_name("nb") == "Норвежский (букмол)",
+            "имя nb с уточнением");
+        require(
+            language_store_name("zz", "Запасное имя") == "Запасное имя",
+            "неизвестный код → fallback");
+        require(
+            language_store_name("zz") == "zz",
+            "неизвестный код без fallback → сам код");
+
+        PackageInfo en_ru;
+        en_ru.from_code = "en";
+        en_ru.to_code = "ru";
+        PackageInfo de_en;
+        de_en.from_code = "de";
+        de_en.to_code = "en";
+        PackageInfo ru_en;
+        ru_en.from_code = "ru";
+        ru_en.to_code = "en";
+        PackageInfo zz_qq;
+        zz_qq.from_code = "zz";
+        zz_qq.to_code = "qq";
+
+        const auto merged = merge_store_pairs({en_ru, de_en}, {ru_en, de_en});
+        require(merged.size() == 4, "слияние: NLLB + 3 пары Argos без дублей");
+        bool has_nllb = false;
+        int de_en_rows = 0;
+        for (const auto& pair : merged) {
+            has_nllb = has_nllb || pair.nllb;
+            if (!pair.nllb && pair.from_code == "de" && pair.to_code == "en") {
+                ++de_en_rows;
+                require(pair.installed, "de→en из установленного списка помечен");
+            }
+            if (!pair.nllb && pair.from_code == "ru" && pair.to_code == "en") {
+                require(pair.installed, "ru→en помечен установленным");
+            }
+            if (!pair.nllb && pair.from_code == "en" && pair.to_code == "ru") {
+                require(!pair.installed, "en→ru только в каталоге — не установлен");
+            }
+        }
+        require(has_nllb, "в магазине есть строка NLLB");
+        require(de_en_rows == 1, "de→en не дублируется между каталогом и диском");
+
+        auto pairs = merge_store_pairs({en_ru, de_en, zz_qq}, {ru_en});
+        require(pairs.size() == 5, "перед сортировкой 5 записей");
+        for (auto& pair : pairs) {
+            if (!pair.nllb && pair.from_code == "zz") {
+                pair.incomplete = true;
+            }
+        }
+        sort_store_pairs(pairs);
+        require(pairs.front().nllb, "NLLB всегда первая");
+        const auto* first_argos = &pairs[1];
+        require(
+            first_argos->from_code == "ru" && first_argos->to_code == "en",
+            "установленная популярная пара сразу после NLLB");
+        const auto* second_argos = &pairs[2];
+        require(
+            second_argos->from_code == "zz" && second_argos->to_code == "qq",
+            "повреждённая непопулярная пара выше непопулярных без пакета");
+        const auto* third_argos = &pairs[3];
+        require(
+            third_argos->from_code == "de" || third_argos->from_code == "en",
+            "дальше идут популярные пары по алфавиту");
+
+        StorePair search_pair;
+        search_pair.from_code = "de";
+        search_pair.to_code = "en";
+        require(store_pair_matches(search_pair, ""), "пустой запрос совпадает со всем");
+        require(store_pair_matches(search_pair, "DE"), "поиск по коду без регистра");
+        require(
+            store_pair_matches(search_pair, "немецкий"),
+            "поиск по русскому названию источника");
+        require(
+            store_pair_matches(search_pair, "Английский"),
+            "поиск по русскому названию цели");
+        require(!store_pair_matches(search_pair, "qq"), "мимо — нет совпадения");
+        StorePair ru_en_pair;
+        ru_en_pair.from_code = "ru";
+        ru_en_pair.to_code = "en";
+        require(store_pair_matches(ru_en_pair, "рус"), "кириллица в нижнем регистре");
+        StorePair nllb_search;
+        nllb_search.nllb = true;
+        require(store_pair_matches(nllb_search, "600M"), "строка NLLB ищется по имени");
+        require(!store_pair_matches(nllb_search, "argos"), "NLLB не отвечает на argos");
+
+        require(
+            store_pair_label(search_pair) == "Немецкий → Английский",
+            "подпись пары из русских названий");
+        require(
+            store_pair_label(nllb_search) == "NLLB-200 Distilled 600M",
+            "подпись строки NLLB");
+    }
+    {
+        // Распаковка gzip и zstd (модели Firefox приходят сжатыми).
+        const std::string payload = "model bytes for firefox smoke test payload";
+        std::vector<std::uint8_t> decompressed;
+        {
+            // Готовим gzip-файстуру через zlib (deflate c gzip-обёрткой).
+            z_stream stream{};
+            deflateInit2(&stream, 6, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+            stream.next_in = reinterpret_cast<Bytef*>(
+                const_cast<char*>(payload.data()));
+            stream.avail_in = static_cast<uInt>(payload.size());
+            std::vector<std::uint8_t> gz;
+            std::array<std::uint8_t, 4096> buffer{};
+            int status = Z_OK;
+            do {
+                stream.next_out = buffer.data();
+                stream.avail_out = static_cast<uInt>(buffer.size());
+                status = deflate(&stream, Z_FINISH);
+                gz.insert(gz.end(), buffer.begin(), buffer.end() - stream.avail_out);
+            } while (status == Z_OK);
+            deflateEnd(&stream);
+            require(status == Z_STREAM_END, "gzip-фикстура создана");
+            require(
+                compression::gunzip(gz.data(), gz.size(), decompressed),
+                "gunzip распаковывает поток");
+            require(
+                std::string(decompressed.begin(), decompressed.end()) == payload,
+                "содержимое после gunzip совпадает");
+        }
+        {
+            const std::size_t bound = ZSTD_compressBound(payload.size());
+            std::vector<std::uint8_t> zstd_payload(bound);
+            const std::size_t compressed = ZSTD_compress(
+                zstd_payload.data(),
+                zstd_payload.size(),
+                payload.data(),
+                payload.size(),
+                3);
+            require(!ZSTD_isError(compressed), "zstd-фикстура создана");
+            require(
+                compression::zunstd(
+                    zstd_payload.data(), compressed, decompressed),
+                "zunstd распаковывает кадр");
+            require(
+                std::string(decompressed.begin(), decompressed.end()) == payload,
+                "содержимое после zunstd совпадает");
+        }
+        require(!compression::gunzip(nullptr, 0, decompressed), "gunzip: пустой вход");
+        require(!compression::zunstd(nullptr, 0, decompressed), "zunstd: пустой вход");
+    }
+    {
+        // Менеджер моделей Firefox: раскладка как language_packages.py.
+        const auto root =
+            std::filesystem::temp_directory_path() / "offline-translator-fx";
+        std::filesystem::remove_all(root);
+        const auto write_ready_model = [](const std::filesystem::path& dir) {
+            std::filesystem::create_directories(dir);
+            fs_utils::write_text_file(dir / "model.bin", "model");
+            fs_utils::write_text_file(dir / "vocab.spm", "vocab");
+        };
+        const auto base_pair = root / "base" / "en-ru";
+        write_ready_model(base_pair);
+        const auto tiny_staging = root / "_downloads" / "tiny-en-fr";
+        std::filesystem::create_directories(tiny_staging);
+        fs_utils::write_text_file(tiny_staging / "model.bin", "part");
+
+        offline_translator::FirefoxModelManager manager(root, "base", "en", "ru");
+        require(manager.is_installed(), "Firefox base/en-ru установлен");
+        require(
+            manager.resolve_model_path().value() == base_pair,
+            "resolve указывает на base/en-ru");
+
+        offline_translator::FirefoxModelManager missing(root, "base", "de", "en");
+        require(!missing.is_installed(), "de→en не установлен");
+        require(missing.has_incomplete_package() == false,
+                "staging другого размера не считается повреждением de→en");
+        offline_translator::FirefoxModelManager broken(root, "tiny", "en", "fr");
+        require(broken.has_incomplete_package(),
+                "недокачанный tiny staging — незавершённый пакет");
+
+        // Legacy-плоский каталог для tiny.
+        write_ready_model(root / "uk-en");
+        offline_translator::FirefoxModelManager legacy(root, "tiny", "uk", "en");
+        require(legacy.is_installed(), "legacy-плоский каталог tiny находится");
+
+        const auto installed =
+            offline_translator::FirefoxModelManager::installed_packages(root);
+        require(installed.size() >= 2, "installed_packages видит обе пары");
+        bool saw_en_ru = false;
+        for (const auto& package : installed) {
+            if (package.from_code == "en" && package.to_code == "ru") {
+                saw_en_ru = true;
+                require(package.architecture == "base",
+                        "metadata/каталог даёт архитектуру base");
+            }
+        }
+        require(saw_en_ru, "en→ru в списке установленных");
+
+        // Каталог: без кэша → встроенный fallback; запись en→ru есть.
+        const auto available_base =
+            offline_translator::FirefoxModelManager::available_packages(root, "base");
+        bool fallback_has_en_ru = false;
+        for (const auto& package : available_base) {
+            if (package.from_code == "en" && package.to_code == "ru") {
+                fallback_has_en_ru = true;
+                require(package.dirname == "enru",
+                        "fallback dirname пары enru");
+            }
+        }
+        require(fallback_has_en_ru, "fallback-каталог base содержит en→ru");
+        const auto available_tiny =
+            offline_translator::FirefoxModelManager::available_packages(root, "tiny");
+        require(available_tiny.size() > 70, "fallback tiny содержит ~80 пар");
+
+        // Удаление убирает и установленный каталог, и staging.
+        manager.uninstall();
+        require(!manager.is_installed(), "после uninstall модель не найдена");
+        broken.uninstall();
+        require(!broken.has_incomplete_package(),
+                "uninstall чистит _downloads");
+        std::filesystem::remove_all(root);
     }
     {
         const unsigned char deflate_zip[] = {

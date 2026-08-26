@@ -1,0 +1,15 @@
+[package]
+name = "fxbridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "fxbridge"
+crate-type = ["cdylib"]
+
+[dependencies]
+fxtranslate = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"

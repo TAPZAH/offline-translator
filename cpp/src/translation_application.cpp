@@ -2,6 +2,8 @@
 
 #include "offline_translator/argos_engine.hpp"
 #include "offline_translator/argos_model_manager.hpp"
+#include "offline_translator/firefox_engine.hpp"
+#include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/nllb_engine.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/translation_service.hpp"
@@ -13,8 +15,10 @@ namespace offline_translator {
 
 class TranslationApplication::State {
 public:
-    State(EngineKind kind, std::filesystem::path root)
-        : engine_kind(kind), models_root(std::move(root)) {
+    State(EngineKind kind, std::filesystem::path root, std::string variant)
+        : engine_kind(kind),
+          models_root(std::move(root)),
+          engine_variant(std::move(variant)) {
         if (models_root.empty()) {
             throw std::invalid_argument("Не задан корень моделей");
         }
@@ -22,6 +26,10 @@ public:
             engine = std::make_unique<ArgosEngine>(models_root);
         } else if (engine_kind == EngineKind::nllb) {
             engine = std::make_unique<NllbEngine>(models_root);
+        } else if (engine_kind == EngineKind::firefox) {
+            engine = std::make_unique<FirefoxEngine>(
+                models_root,
+                engine_variant.empty() ? std::string{"tiny"} : engine_variant);
         } else {
             throw std::invalid_argument("Неизвестный тип движка");
         }
@@ -31,6 +39,15 @@ public:
                 if (engine_kind == EngineKind::argos) {
                     return ArgosModelManager(
                                models_root,
+                               std::string(source),
+                               std::string(target))
+                        .is_installed();
+                }
+                if (engine_kind == EngineKind::firefox) {
+                    return FirefoxModelManager(
+                               models_root,
+                               engine_variant.empty() ? std::string{"tiny"}
+                                                      : engine_variant,
                                std::string(source),
                                std::string(target))
                         .is_installed();
@@ -54,6 +71,7 @@ public:
 
     EngineKind engine_kind;
     std::filesystem::path models_root;
+    std::string engine_variant;
     std::unique_ptr<TranslationEngine> engine;
     std::unique_ptr<TranslationService> service;
 };
@@ -61,7 +79,19 @@ public:
 TranslationApplication::TranslationApplication(
     EngineKind engine_kind,
     std::filesystem::path models_root)
-    : state_(std::make_unique<State>(engine_kind, std::move(models_root))) {}
+    : TranslationApplication(
+          engine_kind,
+          std::move(models_root),
+          std::string{}) {}
+
+TranslationApplication::TranslationApplication(
+    EngineKind engine_kind,
+    std::filesystem::path models_root,
+    std::string engine_variant)
+    : state_(std::make_unique<State>(
+          engine_kind,
+          std::move(models_root),
+          std::move(engine_variant))) {}
 
 TranslationApplication::~TranslationApplication() {
     if (state_) {
@@ -109,6 +139,20 @@ void TranslationApplication::uninstall_package(
         NllbModelManager(state_->models_root).uninstall();
         return;
     }
+    if (state_->engine_kind == EngineKind::firefox) {
+        if (source_code.empty() || target_code.empty()) {
+            throw std::invalid_argument(
+                "Для удаления пакета Firefox нужны коды языков");
+        }
+        FirefoxModelManager(
+            state_->models_root,
+            state_->engine_variant.empty() ? std::string{"tiny"}
+                                           : state_->engine_variant,
+            std::string(source_code),
+            std::string(target_code))
+            .uninstall();
+        return;
+    }
     if (source_code.empty() || target_code.empty()) {
         throw std::invalid_argument(
             "Для удаления пакета Argos нужны коды языков");
@@ -126,6 +170,9 @@ std::string TranslationApplication::engine_name(EngineKind engine_kind) {
     }
     if (engine_kind == EngineKind::nllb) {
         return "NLLB";
+    }
+    if (engine_kind == EngineKind::firefox) {
+        return "Firefox";
     }
     throw std::invalid_argument("Неизвестный тип движка");
 }
@@ -146,17 +193,20 @@ const std::filesystem::path& TranslationApplication::models_root() const {
 
 TranslationApplication& TranslationSession::acquire(
     EngineKind engine_kind,
-    const std::filesystem::path& models_root) {
+    const std::filesystem::path& models_root,
+    const std::string& engine_variant) {
     if (application_ && engine_kind_ == engine_kind &&
-        models_root_ == models_root) {
+        models_root_ == models_root && engine_variant_ == engine_variant) {
         return *application_;
     }
     application_.reset();
     loaded_ = false;
     application_ =
-        std::make_unique<TranslationApplication>(engine_kind, models_root);
+        std::make_unique<TranslationApplication>(
+            engine_kind, models_root, engine_variant);
     engine_kind_ = engine_kind;
     models_root_ = models_root;
+    engine_variant_ = engine_variant;
     return *application_;
 }
 
@@ -164,6 +214,7 @@ void TranslationSession::reset() {
     application_.reset();
     loaded_ = false;
     models_root_.clear();
+    engine_variant_.clear();
 }
 
 TranslationApplication* TranslationSession::get() noexcept {

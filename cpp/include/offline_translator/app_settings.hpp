@@ -21,7 +21,11 @@ struct AppSettings {
     int window_width{0};
     int window_height{0};
     bool popup_requires_ctrl{false};
+    // none | ctrl | alt | shift — клавиша удержания для кнопки перевода.
+    std::string popup_modifier{"none"};
     bool double_ctrl_c_translation{false};
+    // false — кнопка при выделении не показывается, перевод только Ctrl+C+C.
+    bool selection_popup_enabled{true};
     std::string result_window_mode{"click_to_close"};
     std::string translate_hotkey{"Ctrl+Shift+T"};
     // Размер моделей Firefox Translations: tiny | base (как в Python).

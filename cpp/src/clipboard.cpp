@@ -23,6 +23,9 @@ ClipboardRestorer::ClipboardRestorer(Clipboard& clipboard)
 }
 
 ClipboardRestorer::~ClipboardRestorer() {
+    if (!armed_) {
+        return;
+    }
     try {
         clipboard_.set_text(previous_);
     } catch (...) {
@@ -32,6 +35,14 @@ ClipboardRestorer::~ClipboardRestorer() {
 
 const std::wstring& ClipboardRestorer::previous_text() const {
     return previous_;
+}
+
+void ClipboardRestorer::disarm() noexcept {
+    armed_ = false;
+}
+
+bool ClipboardRestorer::armed() const noexcept {
+    return armed_;
 }
 
 std::wstring capture_selected_text(
@@ -66,6 +77,17 @@ std::wstring capture_selected_text(
         }
         if (selected.empty() || selected == sentinel) {
             return {};
+        }
+        std::wstring current;
+        try {
+            current = clipboard.get_text();
+        } catch (...) {
+            current.clear();
+        }
+        // Пользователь успел скопировать другой текст — не затираем его.
+        if (!current.empty() && current != selected && current != sentinel &&
+            current != restorer.previous_text()) {
+            restorer.disarm();
         }
         return selected;
     } catch (...) {
@@ -152,6 +174,24 @@ void Win32Clipboard::set_text(std::wstring_view text) {
 }
 
 void send_copy_keyboard_shortcut() {
+    const bool ctrl_already_down =
+        (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+    send_copy_keyboard_shortcut(ctrl_already_down);
+}
+
+void send_copy_keyboard_shortcut(bool ctrl_already_down) {
+    // Если Ctrl уже удерживается, только нажимаем C. Отпускать Ctrl нельзя:
+    // это ломает Ctrl+V и обычное копирование.
+    if (ctrl_already_down) {
+        INPUT inputs[2]{};
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].ki.wVk = 'C';
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].ki.wVk = 'C';
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput(2, inputs, sizeof(INPUT));
+        return;
+    }
     INPUT inputs[4]{};
     inputs[0].type = INPUT_KEYBOARD;
     inputs[0].ki.wVk = VK_CONTROL;
@@ -185,6 +225,13 @@ void set_capture_wait_hook(void (*hook)(std::uint32_t milliseconds)) {
 std::wstring capture_selected_text_win32(void* owner_hwnd) {
     Win32Clipboard clipboard(owner_hwnd);
     ClipboardRestorer restorer(clipboard);
+    const bool copy_or_paste_now =
+        (GetAsyncKeyState('C') & 0x8000) != 0 ||
+        (GetAsyncKeyState('V') & 0x8000) != 0;
+    if (copy_or_paste_now) {
+        restorer.disarm();
+        return {};
+    }
     const std::wstring sentinel =
         L"__ot_sel_" + std::to_wstring(GetTickCount64()) + L"__";
     clipboard.set_text(sentinel);
@@ -219,6 +266,10 @@ std::wstring capture_selected_text_win32(void* owner_hwnd) {
     }
     if (selected.empty() || selected == sentinel) {
         return {};
+    }
+    // Если пользователь в этот момент копирует, оставляем его буфер.
+    if ((GetAsyncKeyState('C') & 0x8000) != 0) {
+        restorer.disarm();
     }
     return selected;
 }

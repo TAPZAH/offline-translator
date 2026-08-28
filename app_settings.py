@@ -18,6 +18,9 @@ ARCHITECTURES = ("tiny", "base")
 DEFAULT_ARCHITECTURE = "tiny"
 DEFAULT_POPUP_REQUIRES_CTRL = False
 DEFAULT_DOUBLE_CTRL_C_TRANSLATION = False
+POPUP_MODIFIERS = ("none", "ctrl", "alt", "shift")
+DEFAULT_POPUP_MODIFIER = "none"
+DEFAULT_SELECTION_POPUP_ENABLED = True
 RESULT_WINDOW_CLICK_TO_CLOSE = "click_to_close"
 RESULT_WINDOW_SELECTABLE = "selectable"
 RESULT_WINDOW_MODES = (
@@ -191,22 +194,58 @@ def set_firefox_architecture(architecture: str) -> None:
 
 def get_popup_requires_ctrl() -> bool:
     """Нужно ли удерживать Ctrl для появления кнопки после выделения."""
-    value = _load_settings().get(
-        "popup_requires_ctrl",
-        DEFAULT_POPUP_REQUIRES_CTRL,
-    )
-    return value if isinstance(value, bool) else DEFAULT_POPUP_REQUIRES_CTRL
+    return get_popup_modifier() == "ctrl"
 
 
 def set_popup_requires_ctrl(enabled: bool) -> None:
     """Сохраняет требование удерживать Ctrl при выделении."""
+    set_popup_modifier("ctrl" if enabled else "none")
+
+
+def get_popup_modifier() -> str:
+    """Клавиша удержания для кнопки перевода: none, ctrl, alt или shift."""
+    data = _load_settings()
+    value = data.get("popup_modifier")
+    if value in POPUP_MODIFIERS:
+        return value
+    requires_ctrl = data.get("popup_requires_ctrl", DEFAULT_POPUP_REQUIRES_CTRL)
+    if isinstance(requires_ctrl, bool) and requires_ctrl:
+        return "ctrl"
+    return DEFAULT_POPUP_MODIFIER
+
+
+def set_popup_modifier(modifier: str) -> None:
+    """Сохраняет клавишу удержания для кнопки перевода."""
+    if modifier not in POPUP_MODIFIERS:
+        raise ValueError(f"Неизвестный модификатор кнопки: {modifier}")
     data = dict(_load_settings())
-    data["popup_requires_ctrl"] = bool(enabled)
+    data["popup_modifier"] = modifier
+    data["popup_requires_ctrl"] = modifier == "ctrl"
+    _save_settings(data)
+
+
+def get_selection_popup_enabled() -> bool:
+    """Показывать ли кнопку перевода после выделения мышью."""
+    value = _load_settings().get(
+        "selection_popup_enabled",
+        DEFAULT_SELECTION_POPUP_ENABLED,
+    )
+    return value if isinstance(value, bool) else DEFAULT_SELECTION_POPUP_ENABLED
+
+
+def set_selection_popup_enabled(enabled: bool) -> None:
+    """Включает или выключает кнопку при выделении."""
+    data = dict(_load_settings())
+    data["selection_popup_enabled"] = bool(enabled)
+    if not enabled:
+        data["double_ctrl_c_translation"] = True
     _save_settings(data)
 
 
 def get_double_ctrl_c_translation() -> bool:
     """Включён ли перевод по двойному C при удерживаемом Ctrl."""
+    if not get_selection_popup_enabled():
+        return True
     value = _load_settings().get(
         "double_ctrl_c_translation",
         DEFAULT_DOUBLE_CTRL_C_TRANSLATION,
@@ -218,6 +257,8 @@ def set_double_ctrl_c_translation(enabled: bool) -> None:
     """Сохраняет перевод выделения по Ctrl+C+C."""
     data = dict(_load_settings())
     data["double_ctrl_c_translation"] = bool(enabled)
+    if not data.get("selection_popup_enabled", True):
+        data["double_ctrl_c_translation"] = True
     _save_settings(data)
 
 

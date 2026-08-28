@@ -15,6 +15,7 @@ from selection_button import (
     choose_selection_direction,
     should_capture_selection,
     should_show_selection_button,
+    should_skip_selection_copy,
     should_trigger_double_ctrl_c,
 )
 
@@ -69,6 +70,17 @@ def test_ctrl_activation_rules() -> None:
     assert should_show_selection_button(False, False)
     assert should_show_selection_button(True, True)
     assert not should_show_selection_button(True, False)
+    assert should_show_selection_button(False, False, "none")
+    assert should_show_selection_button(False, False, "alt", alt_pressed=True)
+    assert not should_show_selection_button(
+        False, True, "alt", alt_pressed=False
+    )
+    assert should_show_selection_button(
+        False, False, "shift", shift_pressed=True
+    )
+    assert should_skip_selection_copy(True, False)
+    assert should_skip_selection_copy(False, True)
+    assert not should_skip_selection_copy(False, False)
 
     assert should_trigger_double_ctrl_c(10.0, 10.5, True, True)
     assert not should_trigger_double_ctrl_c(10.0, 10.8, True, True)

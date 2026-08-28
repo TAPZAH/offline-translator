@@ -7,18 +7,21 @@ from app_settings import (
     ENGINE_ARGOS,
     ENGINE_NLLB,
     ENGINE_LABELS,
+    POPUP_MODIFIERS,
     RESULT_WINDOW_CLICK_TO_CLOSE,
     RESULT_WINDOW_SELECTABLE,
     engine_from_label,
     engine_label,
     get_double_ctrl_c_translation,
     get_engine_name,
-    get_popup_requires_ctrl,
+    get_popup_modifier,
     get_result_window_mode,
+    get_selection_popup_enabled,
     set_double_ctrl_c_translation,
     set_engine_name,
-    set_popup_requires_ctrl,
+    set_popup_modifier,
     set_result_window_mode,
+    set_selection_popup_enabled,
 )
 from selection_button import TRAY_ICON_PATH
 
@@ -31,8 +34,8 @@ class SettingsWindow:
         self.window = tk.Toplevel(master)
         self.window.title("Настройки")
         self._set_window_icon()
-        self.window.geometry("520x580")
-        self.window.minsize(500, 560)
+        self.window.geometry("520x640")
+        self.window.minsize(500, 620)
         self.window.transient(master)
         self.window.grab_set()
         self._create_widgets()
@@ -81,15 +84,30 @@ class SettingsWindow:
         )
         selection_frame.pack(fill=tk.X, padx=12, pady=(10, 4))
 
-        self.popup_requires_ctrl_var = tk.BooleanVar(
-            value=get_popup_requires_ctrl()
+        modifier_frame = tk.Frame(selection_frame)
+        modifier_frame.pack(fill=tk.X, pady=(0, 4))
+        tk.Label(modifier_frame, text="Клавиша удержания для кнопки:").pack(
+            side=tk.LEFT
         )
-        tk.Checkbutton(
-            selection_frame,
-            text="Показывать кнопку только при удержании Ctrl",
-            variable=self.popup_requires_ctrl_var,
-            anchor=tk.W,
-        ).pack(fill=tk.X)
+        modifier_labels = {
+            "none": "Не требуется",
+            "ctrl": "Ctrl",
+            "alt": "Alt",
+            "shift": "Shift",
+        }
+        self._modifier_by_label = {label: code for code, label in modifier_labels.items()}
+        current_modifier = get_popup_modifier()
+        self.popup_modifier_var = tk.StringVar(
+            value=modifier_labels.get(current_modifier, "Не требуется")
+        )
+        self.popup_modifier_combo = ttk.Combobox(
+            modifier_frame,
+            textvariable=self.popup_modifier_var,
+            values=[modifier_labels[code] for code in POPUP_MODIFIERS],
+            state="readonly",
+            width=16,
+        )
+        self.popup_modifier_combo.pack(side=tk.LEFT, padx=(8, 0))
 
         self.double_ctrl_c_var = tk.BooleanVar(
             value=get_double_ctrl_c_translation()
@@ -100,11 +118,22 @@ class SettingsWindow:
             variable=self.double_ctrl_c_var,
             anchor=tk.W,
         ).pack(fill=tk.X)
+        self.only_ctrl_c_c_var = tk.BooleanVar(
+            value=not get_selection_popup_enabled()
+        )
+        tk.Checkbutton(
+            selection_frame,
+            text="Только Ctrl+C+C (не показывать кнопку при выделении)",
+            variable=self.only_ctrl_c_c_var,
+            command=self._on_only_ctrl_c_c_changed,
+            anchor=tk.W,
+        ).pack(fill=tk.X)
         tk.Label(
             selection_frame,
             text=(
                 "Ctrl+C+C: удерживайте Ctrl и дважды нажмите C. "
-                "Перевод появится рядом с курсором."
+                "Перевод появится рядом с курсором. "
+                "Режим «только Ctrl+C+C» не перехватывает обычные Ctrl+C/Ctrl+V."
             ),
             wraplength=440,
             justify=tk.LEFT,
@@ -160,6 +189,11 @@ class SettingsWindow:
         tk.Button(buttons, text="Отмена", command=self.window.destroy).pack(
             side=tk.RIGHT
         )
+    def _on_only_ctrl_c_c_changed(self) -> None:
+        """Режим «только Ctrl+C+C» всегда включает перевод по двойному C."""
+        if self.only_ctrl_c_c_var.get():
+            self.double_ctrl_c_var.set(True)
+
     def _on_engine_changed(self, _event=None) -> None:
         """Обновляет пояснение для выбранного движка."""
         engine = engine_from_label(self.engine_var.get())
@@ -175,7 +209,12 @@ class SettingsWindow:
         try:
             engine = engine_from_label(self.engine_var.get())
             set_engine_name(engine)
-            set_popup_requires_ctrl(self.popup_requires_ctrl_var.get())
+            modifier = self._modifier_by_label.get(
+                self.popup_modifier_var.get(),
+                "none",
+            )
+            set_popup_modifier(modifier)
+            set_selection_popup_enabled(not self.only_ctrl_c_c_var.get())
             set_double_ctrl_c_translation(self.double_ctrl_c_var.get())
             set_result_window_mode(self.result_window_mode_var.get())
             set_autostart(bool(self.autostart_var.get()))

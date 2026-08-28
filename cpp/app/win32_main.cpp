@@ -76,6 +76,8 @@ constexpr int kSettingsAutostart = 1205;
 constexpr int kSettingsHotkeyEdit = 1206;
 constexpr int kSettingsSave = 1207;
 constexpr int kSettingsCancel = 1208;
+constexpr int kSettingsPopupModifier = 1209;
+constexpr int kSettingsOnlyCtrlCC = 1210;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kShowWindowHotkey = 2001;
@@ -104,6 +106,8 @@ HWND g_package_search = nullptr;
 HWND g_package_arch_caption = nullptr;
 HWND g_package_arch_combo = nullptr;
 HWND g_settings_popup_ctrl = nullptr;
+HWND g_settings_popup_modifier = nullptr;
+HWND g_settings_only_ctrl_c_c = nullptr;
 HWND g_settings_double_ctrl_c = nullptr;
 HWND g_settings_click_to_close = nullptr;
 HWND g_settings_selectable = nullptr;
@@ -174,6 +178,8 @@ struct SelectionMonitor {
     double press_time{0};
     double last_up_time{0};
     double last_ctrl_c_time{0};
+    bool pending_ctrl_c_c{false};
+    double ctrl_c_c_ready_at{0};
     std::wstring selected_text;
 };
 
@@ -308,6 +314,46 @@ double monotonic_seconds() {
     using clock = std::chrono::steady_clock;
     static const auto epoch = clock::now();
     return std::chrono::duration<double>(clock::now() - epoch).count();
+}
+
+int popup_modifier_combo_index(std::string_view modifier) {
+    if (modifier == offline_translator::kPopupModifierCtrl) {
+        return 1;
+    }
+    if (modifier == offline_translator::kPopupModifierAlt) {
+        return 2;
+    }
+    if (modifier == offline_translator::kPopupModifierShift) {
+        return 3;
+    }
+    return 0;
+}
+
+std::string popup_modifier_from_combo(HWND combo) {
+    const LRESULT index = SendMessageW(combo, CB_GETCURSEL, 0, 0);
+    if (index == 1) {
+        return std::string{offline_translator::kPopupModifierCtrl};
+    }
+    if (index == 2) {
+        return std::string{offline_translator::kPopupModifierAlt};
+    }
+    if (index == 3) {
+        return std::string{offline_translator::kPopupModifierShift};
+    }
+    return std::string{offline_translator::kPopupModifierNone};
+}
+
+void fill_popup_modifier_combo(HWND combo, std::string_view selected) {
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Не требуется"));
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ctrl"));
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Alt"));
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Shift"));
+    SendMessageW(
+        combo,
+        CB_SETCURSEL,
+        popup_modifier_combo_index(selected),
+        0);
 }
 
 bool key_down(int virtual_key) {
@@ -1858,8 +1904,29 @@ void capture_and_show_button(HWND main_window, int cursor_x, int cursor_y) {
     }
 }
 
+void finish_double_ctrl_c(HWND main_window) {
+    try {
+        const std::wstring selected = clipboard_text();
+        if (selected.size() >= 2) {
+            g_selection.selected_text = selected;
+            hide_selection_button();
+            start_selection_translation(main_window);
+        }
+    } catch (const std::exception&) {
+    }
+}
+
 void poll_double_ctrl_c(HWND main_window) {
-    if (!g_runtime || !g_runtime->settings.double_ctrl_c_translation) {
+    if (!g_runtime) {
+        return;
+    }
+    if (g_selection.pending_ctrl_c_c) {
+        if (monotonic_seconds() >= g_selection.ctrl_c_c_ready_at) {
+            g_selection.pending_ctrl_c_c = false;
+            finish_double_ctrl_c(main_window);
+        }
+    }
+    if (!g_runtime->settings.double_ctrl_c_translation) {
         g_selection.last_ctrl_c_time = 0;
         g_selection.was_c_pressed = key_down('C');
         return;
@@ -1869,7 +1936,8 @@ void poll_double_ctrl_c(HWND main_window) {
     if (!ctrl_pressed) {
         g_selection.last_ctrl_c_time = 0;
     }
-    if (c_pressed && !g_selection.was_c_pressed && ctrl_pressed) {
+    if (c_pressed && !g_selection.was_c_pressed && ctrl_pressed &&
+        !g_selection.pending_ctrl_c_c) {
         const double now = monotonic_seconds();
         if (offline_translator::should_trigger_double_ctrl_c(
                 g_selection.last_ctrl_c_time,
@@ -1877,15 +1945,8 @@ void poll_double_ctrl_c(HWND main_window) {
                 ctrl_pressed,
                 true)) {
             g_selection.last_ctrl_c_time = 0;
-            try {
-                const std::wstring selected = clipboard_text();
-                if (selected.size() >= 2) {
-                    g_selection.selected_text = selected;
-                    hide_selection_button();
-                    start_selection_translation(main_window);
-                }
-            } catch (const std::exception&) {
-            }
+            g_selection.pending_ctrl_c_c = true;
+            g_selection.ctrl_c_c_ready_at = now + 0.08;
         } else {
             g_selection.last_ctrl_c_time = now;
         }
@@ -1901,6 +1962,11 @@ void poll_selection(HWND main_window) {
     GetCursorPos(&cursor);
     poll_double_ctrl_c(main_window);
     const bool pressed = key_down(VK_LBUTTON);
+    if (!g_runtime->settings.selection_popup_enabled) {
+        g_selection.was_pressed = pressed;
+        g_selection.press_active = false;
+        return;
+    }
     if (pressed && !g_selection.was_pressed) {
         if (is_over_our_popup(cursor.x, cursor.y)) {
             g_selection.press_active = false;
@@ -1967,8 +2033,14 @@ void poll_selection(HWND main_window) {
         g_selection.last_up_x = cursor.x;
         g_selection.last_up_y = cursor.y;
         const bool ctrl_now = key_down(VK_CONTROL);
+        const bool alt_now = key_down(VK_MENU);
+        const bool shift_now = key_down(VK_SHIFT);
+        const bool copy_or_paste_now = offline_translator::should_skip_selection_copy(
+            key_down('C'),
+            key_down('V'));
         const bool gate = !g_selection.gesture_invalid &&
             !is_over_our_popup(cursor.x, cursor.y) &&
+            !copy_or_paste_now &&
             offline_translator::should_capture_selection(
                 g_selection.press_is_client,
                 window_moved,
@@ -1976,16 +2048,19 @@ void poll_selection(HWND main_window) {
                 drag_duration,
                 is_double_click) &&
             offline_translator::should_show_selection_button(
-                g_runtime->settings.popup_requires_ctrl,
-                ctrl_now);
+                g_runtime->settings.popup_modifier,
+                ctrl_now,
+                alt_now,
+                shift_now);
         sel_log(
             "release: dist=" + std::to_string(drag_distance) + " dur=" +
             std::to_string(drag_duration) + " dbl=" +
             std::to_string(is_double_click) + " moved=" +
             std::to_string(window_moved) + " invalid=" +
             std::to_string(g_selection.gesture_invalid) + " ctrl=" +
-            std::to_string(ctrl_now) + " requires_ctrl=" +
-            std::to_string(g_runtime->settings.popup_requires_ctrl) +
+            std::to_string(ctrl_now) + " modifier=" +
+            g_runtime->settings.popup_modifier +
+            " skip_copy=" + std::to_string(copy_or_paste_now) +
             " gate=" + std::to_string(gate));
         if (gate) {
             capture_and_show_button(main_window, cursor.x, cursor.y);
@@ -2183,10 +2258,17 @@ void apply_settings_dialog(HWND settings_window) {
         return;
     }
     auto settings = g_runtime->settings;
+    settings.popup_modifier = popup_modifier_from_combo(g_settings_popup_modifier);
     settings.popup_requires_ctrl =
-        SendMessageW(g_settings_popup_ctrl, BM_GETCHECK, 0, 0) == BST_CHECKED;
+        settings.popup_modifier == offline_translator::kPopupModifierCtrl;
+    const bool only_ctrl_c_c =
+        SendMessageW(g_settings_only_ctrl_c_c, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    settings.selection_popup_enabled = !only_ctrl_c_c;
     settings.double_ctrl_c_translation =
         SendMessageW(g_settings_double_ctrl_c, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (only_ctrl_c_c) {
+        settings.double_ctrl_c_translation = true;
+    }
     settings.result_window_mode =
         SendMessageW(g_settings_click_to_close, BM_GETCHECK, 0, 0) == BST_CHECKED
             ? std::string{offline_translator::kResultWindowClickToClose}
@@ -2247,6 +2329,8 @@ void close_settings_window() {
     HWND main = g_runtime->main_window;
     g_runtime->settings_window = nullptr;
     g_settings_popup_ctrl = nullptr;
+    g_settings_popup_modifier = nullptr;
+    g_settings_only_ctrl_c_c = nullptr;
     g_settings_double_ctrl_c = nullptr;
     g_settings_click_to_close = nullptr;
     g_settings_selectable = nullptr;
@@ -2267,30 +2351,41 @@ LRESULT CALLBACK settings_proc(
     if (message == WM_CREATE) {
         const auto settings = g_runtime ? g_runtime->settings
                                         : offline_translator::AppSettings{};
-        g_settings_popup_ctrl = CreateWindowW(
-            L"BUTTON",
-            L"Показывать кнопку выделения только при удержании Ctrl",
-            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+        CreateWindowW(
+            L"STATIC",
+            L"Клавиша удержания для кнопки перевода:",
+            WS_VISIBLE | WS_CHILD,
             16,
             16,
-            450,
-            24,
+            360,
+            20,
             window,
-            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsPopupCtrl)),
+            nullptr,
             nullptr,
             nullptr);
-        SendMessageW(
-            g_settings_popup_ctrl,
-            BM_SETCHECK,
-            settings.popup_requires_ctrl ? BST_CHECKED : BST_UNCHECKED,
-            0);
+        g_settings_popup_modifier = CreateWindowW(
+            L"COMBOBOX",
+            nullptr,
+            WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_VSCROLL,
+            16,
+            40,
+            240,
+            160,
+            window,
+            reinterpret_cast<HMENU>(
+                static_cast<INT_PTR>(kSettingsPopupModifier)),
+            nullptr,
+            nullptr);
+        fill_popup_modifier_combo(
+            g_settings_popup_modifier,
+            settings.popup_modifier);
         g_settings_double_ctrl_c = CreateWindowW(
             L"BUTTON",
             L"Переводить выделенный текст по Ctrl+C+C",
             WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
             16,
-            48,
-            450,
+            76,
+            470,
             24,
             window,
             reinterpret_cast<HMENU>(
@@ -2302,12 +2397,30 @@ LRESULT CALLBACK settings_proc(
             BM_SETCHECK,
             settings.double_ctrl_c_translation ? BST_CHECKED : BST_UNCHECKED,
             0);
+        g_settings_only_ctrl_c_c = CreateWindowW(
+            L"BUTTON",
+            L"Только Ctrl+C+C (не показывать кнопку при выделении)",
+            WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
+            16,
+            104,
+            470,
+            24,
+            window,
+            reinterpret_cast<HMENU>(
+                static_cast<INT_PTR>(kSettingsOnlyCtrlCC)),
+            nullptr,
+            nullptr);
+        SendMessageW(
+            g_settings_only_ctrl_c_c,
+            BM_SETCHECK,
+            settings.selection_popup_enabled ? BST_UNCHECKED : BST_CHECKED,
+            0);
         CreateWindowW(
             L"STATIC",
             L"Окно результата:",
             WS_VISIBLE | WS_CHILD,
             16,
-            88,
+            140,
             200,
             20,
             window,
@@ -2319,7 +2432,7 @@ LRESULT CALLBACK settings_proc(
             L"Закрывать нажатием по окну",
             WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
             16,
-            112,
+            164,
             300,
             22,
             window,
@@ -2332,7 +2445,7 @@ LRESULT CALLBACK settings_proc(
             L"Выделять текст; закрывать кнопкой «Закрыть»",
             WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
             16,
-            136,
+            188,
             420,
             22,
             window,
@@ -2356,7 +2469,7 @@ LRESULT CALLBACK settings_proc(
             L"Горячая клавиша перевода выделения:",
             WS_VISIBLE | WS_CHILD,
             16,
-            176,
+            228,
             300,
             20,
             window,
@@ -2368,7 +2481,7 @@ LRESULT CALLBACK settings_proc(
             from_utf8(settings.translate_hotkey).c_str(),
             WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
             16,
-            200,
+            252,
             240,
             24,
             window,
@@ -2380,7 +2493,7 @@ LRESULT CALLBACK settings_proc(
             L"Запускать вместе с Windows",
             WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
             16,
-            240,
+            292,
             400,
             24,
             window,
@@ -2402,7 +2515,7 @@ LRESULT CALLBACK settings_proc(
             L"Сохранить",
             WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             16,
-            284,
+            336,
             120,
             30,
             window,
@@ -2414,7 +2527,7 @@ LRESULT CALLBACK settings_proc(
             L"Отмена",
             WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             148,
-            284,
+            336,
             120,
             30,
             window,
@@ -2425,6 +2538,17 @@ LRESULT CALLBACK settings_proc(
     }
     if (message == WM_COMMAND) {
         const int id = LOWORD(w_param);
+        if (id == kSettingsOnlyCtrlCC && HIWORD(w_param) == BN_CLICKED) {
+            if (SendMessageW(g_settings_only_ctrl_c_c, BM_GETCHECK, 0, 0) ==
+                BST_CHECKED) {
+                SendMessageW(
+                    g_settings_double_ctrl_c,
+                    BM_SETCHECK,
+                    BST_CHECKED,
+                    0);
+            }
+            return 0;
+        }
         if (id == kSettingsSave) {
             apply_settings_dialog(window);
             return 0;
@@ -2459,7 +2583,7 @@ void open_settings_window(HWND parent, HINSTANCE instance) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         520,
-        370,
+        450,
         parent,
         nullptr,
         instance,

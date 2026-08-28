@@ -48,10 +48,13 @@ public:
     ClipboardRestorer& operator=(const ClipboardRestorer&) = delete;
 
     const std::wstring& previous_text() const;
+    void disarm() noexcept;
+    bool armed() const noexcept;
 
 private:
     Clipboard& clipboard_;
     std::wstring previous_;
+    bool armed_{true};
 };
 
 // Копирует выделение через callback (в GUI — SendInput Ctrl+C), затем
@@ -64,6 +67,8 @@ std::wstring capture_selected_text(
 
 #ifdef _WIN32
 void send_copy_keyboard_shortcut();
+// Если Ctrl уже нажат пользователем, отпускать его нельзя — ломает Ctrl+V.
+void send_copy_keyboard_shortcut(bool ctrl_already_down);
 std::wstring capture_selected_text_win32(void* owner_hwnd = nullptr);
 
 // Ожидание внутри capture_selected_text_win32. GUI подменяет на вариант,

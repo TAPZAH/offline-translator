@@ -13,14 +13,19 @@ import portable_env
 from app_settings import (
     RESULT_WINDOW_CLICK_TO_CLOSE,
     get_double_ctrl_c_translation,
+    get_popup_modifier,
     get_popup_requires_ctrl,
     get_result_window_mode,
+    get_selection_popup_enabled,
 )
 from language_detect import detect_language_code, language_display_name
 
 VK_LBUTTON = 0x01
+VK_SHIFT = 0x10
 VK_CONTROL = 0x11
+VK_MENU = 0x12
 VK_C = 0x43
+VK_V = 0x56
 KEYEVENTF_KEYUP = 0x0002
 DRAG_THRESHOLD_PX = 16
 MIN_DRAG_DURATION_S = 0.18
@@ -124,9 +129,25 @@ def should_trigger_double_ctrl_c(
 def should_show_selection_button(
     requires_ctrl: bool,
     ctrl_pressed: bool,
+    modifier: str | None = None,
+    alt_pressed: bool = False,
+    shift_pressed: bool = False,
 ) -> bool:
-    """Разрешает кнопку всегда или только при удерживаемом Ctrl."""
-    return not requires_ctrl or ctrl_pressed
+    """Разрешает кнопку всегда или только при выбранном модификаторе."""
+    if modifier is None:
+        modifier = "ctrl" if requires_ctrl else "none"
+    if modifier == "ctrl":
+        return ctrl_pressed
+    if modifier == "alt":
+        return alt_pressed
+    if modifier == "shift":
+        return shift_pressed
+    return True
+
+
+def should_skip_selection_copy(c_pressed: bool, v_pressed: bool) -> bool:
+    """Не инжектирует Ctrl+C, пока пользователь копирует или вставляет."""
+    return bool(c_pressed or v_pressed)
 
 
 def _cursor_position() -> tuple[int, int]:
@@ -201,10 +222,13 @@ def should_capture_selection(
 def _send_ctrl_c() -> None:
     """Отправляет Ctrl+C, чтобы скопировать текущее выделение."""
     user32 = ctypes.windll.user32
-    user32.keybd_event(VK_CONTROL, 0, 0, 0)
+    ctrl_already_down = _control_pressed()
+    if not ctrl_already_down:
+        user32.keybd_event(VK_CONTROL, 0, 0, 0)
     user32.keybd_event(VK_C, 0, 0, 0)
     user32.keybd_event(VK_C, 0, KEYEVENTF_KEYUP, 0)
-    user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+    if not ctrl_already_down:
+        user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
 
 
 def capture_selected_text() -> str:
@@ -215,17 +239,23 @@ def capture_selected_text() -> str:
     except Exception:
         previous = ""
     sentinel = f"__ot_sel_{time.time_ns()}__"
+    restore_previous = True
     try:
+        if _key_pressed(VK_C) or _key_pressed(VK_V):
+            return ""
         pyperclip.copy(sentinel)
         _send_ctrl_c()
         time.sleep(CLIPBOARD_WAIT_S)
         selected = pyperclip.paste() or ""
+        if _key_pressed(VK_C) and selected and selected != sentinel:
+            restore_previous = False
     except Exception:
         selected = ""
-    try:
-        pyperclip.copy(previous)
-    except Exception:
-        pass
+    if restore_previous:
+        try:
+            pyperclip.copy(previous)
+        except Exception:
+            pass
     selected = selected.strip()
     if not selected or selected == sentinel:
         return ""
@@ -513,6 +543,10 @@ class SelectionPopup:
         self._last_up_y = cursor_y
         if self._gesture_invalid or self._is_over_our_popup(cursor_x, cursor_y):
             return
+        if not get_selection_popup_enabled():
+            return
+        if should_skip_selection_copy(_key_pressed(VK_C), _key_pressed(VK_V)):
+            return
         if not should_capture_selection(
             self._press_is_client,
             window_moved,
@@ -524,6 +558,9 @@ class SelectionPopup:
         if not should_show_selection_button(
             get_popup_requires_ctrl(),
             _control_pressed(),
+            get_popup_modifier(),
+            _key_pressed(VK_MENU),
+            _key_pressed(VK_SHIFT),
         ):
             return
         if self._capture_job is not None:

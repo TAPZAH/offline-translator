@@ -131,6 +131,18 @@ std::string read_translate_hotkey(const nlohmann::json& data) {
     return std::string{kDefaultTranslateHotkey};
 }
 
+std::string read_popup_modifier(const nlohmann::json& data) {
+    const auto spec = read_string(data, "popup_modifier", "");
+    const auto normalized = normalize_popup_modifier(spec);
+    if (!spec.empty() && spec == normalized) {
+        return normalized;
+    }
+    if (read_bool(data, "popup_requires_ctrl", false)) {
+        return std::string{kPopupModifierCtrl};
+    }
+    return std::string{kPopupModifierNone};
+}
+
 }  // анонимное пространство имён
 
 std::filesystem::path default_data_root() {
@@ -177,10 +189,16 @@ AppSettings load_settings(const std::filesystem::path& path) {
         if (settings.window_height < 0) {
             settings.window_height = 0;
         }
+        settings.popup_modifier = read_popup_modifier(data);
         settings.popup_requires_ctrl =
-            read_bool(data, "popup_requires_ctrl", false);
+            settings.popup_modifier == kPopupModifierCtrl;
         settings.double_ctrl_c_translation =
             read_bool(data, "double_ctrl_c_translation", false);
+        settings.selection_popup_enabled =
+            read_bool(data, "selection_popup_enabled", true);
+        if (!settings.selection_popup_enabled) {
+            settings.double_ctrl_c_translation = true;
+        }
         settings.result_window_mode = read_result_window_mode(data);
         settings.translate_hotkey = read_translate_hotkey(data);
         settings.architecture = read_architecture(data);
@@ -208,8 +226,16 @@ void save_settings(
     if (settings.window_height > 0) {
         data["window_height"] = settings.window_height;
     }
-    data["popup_requires_ctrl"] = settings.popup_requires_ctrl;
-    data["double_ctrl_c_translation"] = settings.double_ctrl_c_translation;
+    const auto popup_modifier =
+        normalize_popup_modifier(settings.popup_modifier);
+    const bool popup_requires_ctrl = popup_modifier == kPopupModifierCtrl;
+    const bool selection_popup_enabled = settings.selection_popup_enabled;
+    const bool double_ctrl_c_translation =
+        selection_popup_enabled ? settings.double_ctrl_c_translation : true;
+    data["popup_requires_ctrl"] = popup_requires_ctrl;
+    data["popup_modifier"] = popup_modifier;
+    data["double_ctrl_c_translation"] = double_ctrl_c_translation;
+    data["selection_popup_enabled"] = selection_popup_enabled;
     data["result_window_mode"] = settings.result_window_mode;
     data["translate_hotkey"] = settings.translate_hotkey;
     if (settings.architecture == "tiny" || settings.architecture == "base") {

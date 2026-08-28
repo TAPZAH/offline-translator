@@ -799,6 +799,9 @@ int main() {
             "  \"popup_requires_ctrl\": true\n}\n");
         auto loaded = load_settings(path);
         require(loaded.engine == "argos", "чтение engine из JSON");
+        require(
+            loaded.popup_modifier == "ctrl",
+            "legacy popup_requires_ctrl → ctrl");
         loaded.engine = "nllb";
         loaded.source_language = "de";
         loaded.target_language = "fr";
@@ -836,7 +839,9 @@ int main() {
             "файл настроек называется settings.json");
         loaded.translate_hotkey = "Alt+F9";
         loaded.popup_requires_ctrl = true;
+        loaded.popup_modifier = "alt";
         loaded.double_ctrl_c_translation = true;
+        loaded.selection_popup_enabled = false;
         loaded.result_window_mode = std::string{kResultWindowSelectable};
         save_settings(path, loaded);
         const auto hotkey_roundtrip = load_settings(path);
@@ -844,11 +849,17 @@ int main() {
             hotkey_roundtrip.translate_hotkey == "Alt+F9",
             "translate_hotkey сохраняется");
         require(
-            hotkey_roundtrip.popup_requires_ctrl,
-            "popup_requires_ctrl читается");
+            hotkey_roundtrip.popup_modifier == "alt",
+            "popup_modifier сохраняется");
+        require(
+            !hotkey_roundtrip.popup_requires_ctrl,
+            "popup_requires_ctrl следует за modifier != ctrl");
         require(
             hotkey_roundtrip.double_ctrl_c_translation,
             "double_ctrl_c_translation читается");
+        require(
+            !hotkey_roundtrip.selection_popup_enabled,
+            "selection_popup_enabled сохраняется");
         require(
             hotkey_roundtrip.result_window_mode == kResultWindowSelectable,
             "result_window_mode сохраняется");
@@ -958,6 +969,32 @@ int main() {
             !should_show_selection_button(true, false),
             "кнопка скрыта без Ctrl");
         require(
+            should_show_selection_button("none", false, false, false),
+            "кнопка без модификатора");
+        require(
+            should_show_selection_button("alt", false, true, false),
+            "кнопка при Alt");
+        require(
+            !should_show_selection_button("alt", true, false, false),
+            "кнопка скрыта без Alt");
+        require(
+            should_show_selection_button("shift", false, false, true),
+            "кнопка при Shift");
+        require(
+            should_skip_selection_copy(true, false),
+            "пропуск копирования при C");
+        require(
+            should_skip_selection_copy(false, true),
+            "пропуск копирования при V");
+        require(
+            !should_skip_selection_copy(false, false),
+            "захват без C/V разрешён");
+        require(normalize_popup_modifier("ALT") == "none", "неизвестный modifier");
+        require(normalize_popup_modifier("ctrl") == "ctrl", "ctrl нормализуется");
+        require(
+            popup_modifier_from_legacy(true) == "ctrl",
+            "legacy true → ctrl");
+        require(
             should_trigger_double_ctrl_c(10.0, 10.5, true, true),
             "Ctrl+C+C в окне 0.7с");
         require(
@@ -1010,6 +1047,18 @@ int main() {
         require(
             clipboard.get_text() == L"keep me",
             "RAII восстанавливает буфер");
+    }
+    {
+        MemoryClipboard clipboard;
+        clipboard.set_text(L"keep me");
+        {
+            ClipboardRestorer restorer(clipboard);
+            clipboard.set_text(L"user copy");
+            restorer.disarm();
+        }
+        require(
+            clipboard.get_text() == L"user copy",
+            "disarm не затирает буфер пользователя");
     }
 
 #ifdef _WIN32

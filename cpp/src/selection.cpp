@@ -1,6 +1,7 @@
 #include "offline_translator/selection.hpp"
 
 #include <map>
+#include <string>
 
 namespace offline_translator {
 namespace {
@@ -59,8 +60,56 @@ bool is_latin(char32_t ch) {
 
 }  // анонимное пространство имён
 
+std::string normalize_popup_modifier(std::string_view modifier) {
+    if (modifier == kPopupModifierCtrl || modifier == kPopupModifierAlt ||
+        modifier == kPopupModifierShift || modifier == kPopupModifierNone) {
+        return std::string(modifier);
+    }
+    return std::string{kPopupModifierNone};
+}
+
+std::string popup_modifier_from_legacy(bool requires_ctrl) {
+    return requires_ctrl ? std::string{kPopupModifierCtrl}
+                         : std::string{kPopupModifierNone};
+}
+
+bool popup_modifier_held(
+    std::string_view modifier,
+    bool ctrl_pressed,
+    bool alt_pressed,
+    bool shift_pressed) {
+    const auto normalized = normalize_popup_modifier(modifier);
+    if (normalized == kPopupModifierCtrl) {
+        return ctrl_pressed;
+    }
+    if (normalized == kPopupModifierAlt) {
+        return alt_pressed;
+    }
+    if (normalized == kPopupModifierShift) {
+        return shift_pressed;
+    }
+    return true;
+}
+
+bool should_show_selection_button(
+    std::string_view modifier,
+    bool ctrl_pressed,
+    bool alt_pressed,
+    bool shift_pressed) {
+    return popup_modifier_held(
+        modifier, ctrl_pressed, alt_pressed, shift_pressed);
+}
+
 bool should_show_selection_button(bool requires_ctrl, bool ctrl_pressed) {
-    return !requires_ctrl || ctrl_pressed;
+    return should_show_selection_button(
+        popup_modifier_from_legacy(requires_ctrl),
+        ctrl_pressed,
+        false,
+        false);
+}
+
+bool should_skip_selection_copy(bool c_pressed, bool v_pressed) {
+    return c_pressed || v_pressed;
 }
 
 bool should_trigger_double_ctrl_c(

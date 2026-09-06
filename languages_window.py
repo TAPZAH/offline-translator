@@ -33,60 +33,93 @@ from packages import (
 
 
 class LanguagesWindow:
-    """Окно установки дополнительных языковых пакетов."""
+    """Список языковых пакетов: отдельное окно или страница настроек."""
 
-    def __init__(self, master: tk.Misc, on_packages_changed) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        on_packages_changed,
+        container: tk.Misc | None = None,
+    ) -> None:
         self.on_packages_changed = on_packages_changed
         self.is_busy = False
         self.available_packages = []
+        self._embedded = container is not None
 
-        self.window = tk.Toplevel(master)
-        self.window.title("Языковые пакеты")
-        self.window.geometry("640x500")
-        self.window.minsize(600, 440)
-        self.window.transient(master)
+        if self._embedded:
+            self.window = master.winfo_toplevel()
+            self.body = container
+        else:
+            self.window = tk.Toplevel(master)
+            self.window.title("Языковые пакеты")
+            self.window.geometry("640x500")
+            self.window.minsize(600, 440)
+            self.window.transient(master)
+            self.body = self.window
 
         self._create_widgets()
         self._load_installed_only()
         threading.Thread(target=self._load_remote_index, daemon=True).start()
 
-    def _create_widgets(self) -> None:
-        """Создаёт список пакетов, поиск и кнопки."""
+    def refresh_engine_ui(self) -> None:
+        """Обновляет подсказку и список после смены движка."""
+        if not self._window_alive() or self.is_busy:
+            return
+        self.hint_label.config(text=self._hint_text())
+        if get_engine_name() == ENGINE_FIREFOX:
+            if not self.size_frame.winfo_ismapped():
+                self.size_frame.pack(
+                    fill=tk.X,
+                    padx=10,
+                    pady=4,
+                    before=self.search_frame,
+                )
+        else:
+            self.size_frame.pack_forget()
+        self._load_installed_only()
+        threading.Thread(target=self._load_remote_index, daemon=True).start()
+
+    def _hint_text(self) -> str:
+        """Текст подсказки для текущего движка."""
         engine = get_engine_name()
         if engine == ENGINE_FIREFOX:
-            hint_text = (
+            return (
                 "Нет прямой пары — программа переведёт через английский. "
                 "Для китайского нужен размер base. "
                 "Установленный пакет можно удалить или скачать заново."
             )
-        elif engine == ENGINE_ARGOS:
-            hint_text = (
+        if engine == ENGINE_ARGOS:
+            return (
                 "Пакеты Argos Translate. Нет прямой пары — перевод пойдёт через английский. "
                 "Установленный пакет можно удалить или скачать заново."
             )
-        elif engine == ENGINE_NLLB:
-            hint_text = (
+        if engine == ENGINE_NLLB:
+            return (
                 "NLLB-200 — одна модель на 200 языков. Скачайте пакет один раз, "
                 "после этого доступны все пары. Повреждённую модель удалите "
                 "или скачайте заново."
             )
-        elif engine == ENGINE_MARIAN:
-            hint_text = (
+        if engine == ENGINE_MARIAN:
+            return (
                 "MarianMT — модели Helsinki-NLP OPUS-MT через CTranslate2. "
                 "Нет прямой пары — перевод пойдёт через английский. "
                 "Установленный пакет можно удалить или скачать заново."
             )
-        else:
-            hint_text = "Установите языковые пакеты текущего движка."
-        hint = tk.Label(
-            self.window,
+        return "Установите языковые пакеты текущего движка."
+
+    def _create_widgets(self) -> None:
+        """Создаёт список пакетов, поиск и кнопки."""
+        engine = get_engine_name()
+        hint_text = self._hint_text()
+        self.hint_label = tk.Label(
+            self.body,
             text=hint_text,
-            wraplength=600,
+            wraplength=640,
             justify=tk.LEFT,
         )
-        hint.pack(fill=tk.X, padx=10, pady=(10, 4))
+        self.hint_label.pack(fill=tk.X, padx=10, pady=(10, 4))
 
-        self.size_frame = tk.Frame(self.window)
+        self.size_frame = tk.Frame(self.body)
         tk.Label(self.size_frame, text="Модель:").pack(side=tk.LEFT)
         self.size_var = tk.StringVar(value=architecture_label(get_model_architecture()))
         self.size_combo = ttk.Combobox(
@@ -101,15 +134,15 @@ class LanguagesWindow:
         if engine == ENGINE_FIREFOX:
             self.size_frame.pack(fill=tk.X, padx=10, pady=4)
 
-        search_frame = tk.Frame(self.window)
-        search_frame.pack(fill=tk.X, padx=10, pady=4)
-        tk.Label(search_frame, text="Поиск:").pack(side=tk.LEFT)
+        self.search_frame = tk.Frame(self.body)
+        self.search_frame.pack(fill=tk.X, padx=10, pady=4)
+        tk.Label(self.search_frame, text="Поиск:").pack(side=tk.LEFT)
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *_args: self._fill_tree())
-        search_entry = tk.Entry(search_frame, textvariable=self.search_var)
+        search_entry = tk.Entry(self.search_frame, textvariable=self.search_var)
         search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 0))
 
-        list_frame = tk.Frame(self.window)
+        list_frame = tk.Frame(self.body)
         list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=4)
 
         columns = ("from_lang", "to_lang", "status")
@@ -131,7 +164,7 @@ class LanguagesWindow:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.bind("<<TreeviewSelect>>", lambda _event: self._refresh_action_buttons())
 
-        button_frame = tk.Frame(self.window)
+        button_frame = tk.Frame(self.body)
         button_frame.pack(fill=tk.X, padx=10, pady=4)
         self.install_button = tk.Button(
             button_frame,
@@ -151,14 +184,15 @@ class LanguagesWindow:
             command=self._on_delete_click,
         )
         self.delete_button.pack(side=tk.LEFT, padx=(6, 0))
-        tk.Button(button_frame, text="Закрыть", command=self.window.destroy).pack(
-            side=tk.RIGHT
-        )
+        if not self._embedded:
+            tk.Button(button_frame, text="Закрыть", command=self.window.destroy).pack(
+                side=tk.RIGHT
+            )
 
-        self.progress = ttk.Progressbar(self.window, mode="determinate")
+        self.progress = ttk.Progressbar(self.body, mode="determinate")
         self.progress.pack(fill=tk.X, padx=10, pady=(4, 2))
         self.status_var = tk.StringVar(value="Загружаю список пакетов...")
-        tk.Label(self.window, textvariable=self.status_var, anchor=tk.W).pack(
+        tk.Label(self.body, textvariable=self.status_var, anchor=tk.W).pack(
             fill=tk.X, padx=10, pady=(0, 8)
         )
         self._refresh_action_buttons()

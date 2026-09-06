@@ -7,7 +7,7 @@
 ; %USERPROFILE%\.local\share\offline-translator не трогается.
 
 #define AppName "Оффлайн Переводчик"
-#define AppVersion "0.99-beta"
+#define AppVersion "0.995-beta"
 #define AppPublisher "TAP3AH"
 #define AppExeName "offline_translator_win32.exe"
 #define PortableDir "portable-win32-lite"
@@ -24,7 +24,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=installer-output
-OutputBaseFilename=offline-translator-cpp-0.99-beta-setup
+OutputBaseFilename=offline-translator-cpp-0.995-beta-setup
 SetupIconFile=..\assets\app.ico
 LicenseFile=..\LICENSE
 UninstallDisplayIcon={app}\{#AppExeName}
@@ -33,11 +33,11 @@ SolidCompression=yes
 WizardStyle=modern
 CloseApplications=yes
 RestartApplications=no
-VersionInfoVersion=0.99.0.0
+VersionInfoVersion=0.995.0.0
 VersionInfoCompany={#AppPublisher}
 VersionInfoDescription={#AppName}
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=0.99.0.0
+VersionInfoProductVersion=0.995.0.0
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"

@@ -33,7 +33,7 @@ from ctypes import wintypes
 
 import pystray
 import pystray._util.win32 as win32_util
-from PIL import Image
+from PIL import Image, ImageTk
 
 try:
     import pyperclip
@@ -52,7 +52,6 @@ from app_settings import (
 from autostart import is_autostart_enabled, set_autostart
 from app_version import window_title
 from language_detect import detect_language_code, language_display_name
-from languages_window import LanguagesWindow
 from packages import get_installed_pairs, needed_pairs_for_path
 from selection_button import (
     SelectionPopup,
@@ -61,6 +60,13 @@ from selection_button import (
 )
 from settings_window import SettingsWindow
 from translation_engine import get_engine, invalidate_engines
+from ui_theme import (
+    apply_ui_fonts,
+    apply_window_theme,
+    app_theme,
+    enable_windows_dpi,
+    style_button,
+)
 
 
 def patch_pystray_win32() -> None:
@@ -113,13 +119,15 @@ class TranslatorApp:
         self._detect_job = None
         self._load_generation = 0
         self._languages_dialog = None
+        self._swap_photo = None
+        self._window_icon = None
         self.selection_popup = None
 
         self._setup_window()
         self._create_widgets()
         # Крестик обрабатывается на стороне Tcl: только скрыть окно
         self._apply_close_protocol()
-        self.window.bind("<Map>", lambda _event: self._apply_close_protocol())
+        self.window.bind("<Map>", self._on_window_mapped)
         self.window.bind("<Alt-F4>", self._on_alt_f4)
         # Запускаем загрузку модели и иконку трея после отрисовки окна
         self.window.after(100, self._start_model_loading)
@@ -137,11 +145,16 @@ class TranslatorApp:
     def _setup_window(self) -> None:
         """Настраивает размер и заголовок окна."""
         self.window.title(window_title())
-        self.window.geometry("720x520")
-        self.window.minsize(720, 520)
+        self.window.geometry("900x560")
+        self.window.minsize(880, 520)
         self.window.columnconfigure(0, weight=1)
         self.window.rowconfigure(1, weight=1)
         self.window.rowconfigure(4, weight=1)
+
+    def _on_window_mapped(self, _event=None) -> None:
+        """После показа из трея снова вешает крестик и проверяет ширину."""
+        self._apply_close_protocol()
+        self._ensure_window_size()
 
     def _apply_close_protocol(self) -> None:
         """Вешает на крестик Tcl-команду wm withdraw — без Python и без Win32."""
@@ -164,22 +177,35 @@ class TranslatorApp:
         """Создаёт выбор языков, поля ввода, кнопку и строку статуса."""
         toolbar = tk.Frame(self.window)
         toolbar.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
+        toolbar.columnconfigure(0, weight=1)
+        left_bar = tk.Frame(toolbar)
+        right_bar = tk.Frame(toolbar)
+        left_bar.grid(row=0, column=0, sticky="w")
+        right_bar.grid(row=0, column=1, sticky="e")
 
-        tk.Label(toolbar, text="С языка:").pack(side=tk.LEFT)
+        tk.Label(left_bar, text="С языка:").pack(side=tk.LEFT)
         self.source_var = tk.StringVar(value="Авто")
         self.source_combo = ttk.Combobox(
-            toolbar,
+            left_bar,
             textvariable=self.source_var,
             state="readonly",
             width=16,
         )
-        self.source_combo.pack(side=tk.LEFT, padx=(4, 10))
+        self.source_combo.pack(side=tk.LEFT, padx=(4, 4))
         self.source_combo.bind("<<ComboboxSelected>>", self._on_language_choice_changed)
 
-        tk.Label(toolbar, text="На язык:").pack(side=tk.LEFT)
+        self.swap_button = tk.Button(
+            left_bar,
+            command=self._swap_languages,
+            bd=0,
+            highlightthickness=0,
+        )
+        self.swap_button.pack(side=tk.LEFT, padx=4)
+
+        tk.Label(left_bar, text="На язык:").pack(side=tk.LEFT)
         self.target_var = tk.StringVar(value="Авто")
         self.target_combo = ttk.Combobox(
-            toolbar,
+            left_bar,
             textvariable=self.target_var,
             state="readonly",
             width=16,
@@ -188,27 +214,20 @@ class TranslatorApp:
         self.target_combo.bind("<<ComboboxSelected>>", self._on_language_choice_changed)
 
         self.engine_label_var = tk.StringVar(value=self._engine_toolbar_text())
-        tk.Label(toolbar, textvariable=self.engine_label_var, fg="#333333").pack(
+        tk.Label(left_bar, textvariable=self.engine_label_var).pack(
             side=tk.LEFT,
             padx=(0, 10),
         )
 
-        self.languages_button = tk.Button(
-            toolbar,
-            text="Языки...",
-            command=self._open_languages_window,
-        )
-        self.languages_button.pack(side=tk.RIGHT)
-
         self.settings_button = tk.Button(
-            toolbar,
+            right_bar,
             text="Настройки...",
             command=self._open_settings_window,
         )
-        self.settings_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.settings_button.pack(side=tk.RIGHT)
 
         self.detected_var = tk.StringVar(value="Язык: —")
-        tk.Label(toolbar, textvariable=self.detected_var, fg="#333333").pack(
+        tk.Label(right_bar, textvariable=self.detected_var).pack(
             side=tk.RIGHT,
             padx=(0, 10),
         )
@@ -253,6 +272,7 @@ class TranslatorApp:
             padx=8,
         )
         self.status_label.grid(row=5, column=0, sticky="ew")
+        self._apply_window_theme()
 
     def _set_status(self, message: str) -> None:
         """Обновляет текст строки статуса."""
@@ -307,12 +327,12 @@ class TranslatorApp:
         needed = needed_pairs_for_path(source_code, target_code)
         if needed == [("nllb", "all")]:
             return (
-                "Модель NLLB не установлена. Откройте «Языки» и скачайте "
+                "Модель NLLB не установлена. Откройте «Настройки» → «Языки» и скачайте "
                 "NLLB-200 Distilled 600M."
             )
         if not needed:
             return (
-                f"Нет модели {source_name} → {target_name}. Откройте «Языки»."
+                f"Нет модели {source_name} → {target_name}. Откройте «Настройки» → «Языки»."
             )
         legs = ", ".join(
             f"{language_display_name(from_code)} → {language_display_name(to_code)}"
@@ -487,31 +507,101 @@ class TranslatorApp:
         except Exception:
             return "Движок"
 
-    def _open_settings_window(self) -> None:
-        """Открывает окно выбора движка и размера Firefox."""
+    def _apply_window_theme(self) -> None:
+        """Красит главное окно и кнопки в текущую тему."""
+        theme = app_theme()
+        apply_window_theme(self.window, theme)
+        for field in (self.input_text, self.output_text, self.pivot_text):
+            field.configure(
+                bg=theme["field_bg"],
+                fg=theme["text"],
+                insertbackground=theme["text"],
+                selectbackground=theme["select_bg"],
+                selectforeground=theme["select_fg"],
+                font=("Segoe UI", 11),
+            )
+        self.status_label.configure(
+            bg=theme["surface"],
+            fg=theme["text"],
+            relief=tk.FLAT,
+            font=("Segoe UI", 10),
+        )
+        style_button(self.translate_button, theme)
+        style_button(self.settings_button, theme)
+        self._set_window_icon()
+        self._load_swap_icon()
+
+    def _set_window_icon(self) -> None:
+        """Иконка окна по текущей теме."""
+        try:
+            self._window_icon = tk.PhotoImage(
+                file=theme_icon_path(),
+                master=self.window,
+            )
+            self.window.iconphoto(True, self._window_icon)
+        except (tk.TclError, OSError):
+            self._window_icon = None
+
+    def _load_swap_icon(self) -> None:
+        """Кладёт тематическую иконку на кнопку смены направления."""
+        try:
+            with Image.open(theme_icon_path()) as opened:
+                image = opened.convert("RGBA").resize(
+                    (32, 32),
+                    Image.Resampling.LANCZOS,
+                )
+            self._swap_photo = ImageTk.PhotoImage(image, master=self.window)
+            self.swap_button.configure(
+                image=self._swap_photo,
+                text="",
+                bg=app_theme()["bg"],
+                activebackground=app_theme()["button_hover"],
+                relief=tk.FLAT,
+                bd=0,
+                highlightthickness=0,
+                cursor="hand2",
+            )
+        except (tk.TclError, OSError) as error:
+            self.swap_button.configure(text="⇄")
+            log_exception("Не удалось загрузить иконку смены языков", error)
+
+    def _swap_languages(self) -> None:
+        """Меняет местами исходный и целевой язык."""
+        source = self.source_var.get()
+        target = self.target_var.get()
+        self.source_var.set(target)
+        self.target_var.set(source)
+        self._update_detected_label()
+
+    def _open_settings_window(self, page: str = "behavior") -> None:
+        """Открывает настройки, при необходимости сразу на странице языков."""
         try:
             existing = getattr(self, "_settings_window", None)
             if existing is not None and existing.window.winfo_exists():
+                existing._show_page(page)
                 existing.window.lift()
                 existing.window.focus_force()
                 return
             self._settings_window = SettingsWindow(
                 self.window,
                 on_settings_changed=self._on_settings_changed,
+                on_packages_changed=self._reload_languages_from_ui,
+                initial_page=page,
             )
         except Exception as error:
             log_exception("Ошибка настроек", error)
             self._set_status(f"Ошибка настроек: {error}")
 
     def _on_settings_changed(self) -> None:
-        """Применяет новый движок в фоне, чтобы не блокировать и не ронять UI."""
+        """Применяет тему и, если нужно, перезагружает движок."""
         try:
+            self._apply_window_theme()
             engine_name = get_engine_name()
+            self.engine_label_var.set(self._engine_toolbar_text())
             get_logger().info("Смена движка на %s", engine_name)
             flush_logs()
             invalidate_engines()
             self.engine = None
-            self.engine_label_var.set(self._engine_toolbar_text())
             self._start_model_loading()
         except Exception as error:
             log_exception("Ошибка смены движка", error)
@@ -555,19 +645,8 @@ class TranslatorApp:
         return None
 
     def _open_languages_window(self) -> None:
-        """Открывает окно установки языковых пакетов."""
-        try:
-            if self._languages_dialog is not None and self._languages_dialog.window.winfo_exists():
-                self._languages_dialog.window.lift()
-                self._languages_dialog.window.focus_force()
-                return
-            self._languages_dialog = LanguagesWindow(
-                self.window,
-                on_packages_changed=self._reload_languages_from_ui,
-            )
-        except Exception as error:
-            log_exception("Не удалось открыть окно языков", error)
-            self._set_status(f"Не удалось открыть окно языков: {error}")
+        """Открывает настройки на странице языков."""
+        self._open_settings_window(page="languages")
 
     def _reload_languages_from_ui(self) -> None:
         """Перечитывает пакеты после установки из окна языков."""
@@ -581,7 +660,7 @@ class TranslatorApp:
                 self._set_status("Языковые пакеты обновлены")
             else:
                 self.translate_button.config(state=tk.DISABLED)
-                self._set_status("Нет установленных пакетов. Откройте «Языки».")
+                self._set_status("Нет установленных пакетов. Откройте «Настройки» → «Языки».")
         except Exception as error:
             log_exception("Ошибка обновления языков", error)
             self._set_status(f"Ошибка обновления языков: {error}")
@@ -617,7 +696,7 @@ class TranslatorApp:
                 self.root.after(
                     0,
                     lambda g=generation: self._on_model_error(
-                        "Нет установленных пакетов. Откройте «Языки».",
+                        "Нет установленных пакетов. Откройте «Настройки» → «Языки».",
                         g,
                     ),
                 )
@@ -740,7 +819,7 @@ class TranslatorApp:
         if target_choice == "auto":
             target_code = self._pick_auto_target(source_code)
             if target_code is None:
-                self._set_status("Нет языка назначения. Установите пакеты в «Языки».")
+                self._set_status("Нет языка назначения. Установите пакеты в «Настройки» → «Языки».")
                 return None
         else:
             target_code = target_choice
@@ -925,6 +1004,7 @@ class TranslatorApp:
                 return
             self.window.deiconify()
             self.window.state("normal")
+            self._ensure_window_size()
             self.window.lift()
             self.window.attributes("-topmost", True)
             self.window.after(
@@ -932,6 +1012,19 @@ class TranslatorApp:
                 lambda: self.window.attributes("-topmost", False),
             )
             self.window.focus_force()
+        except tk.TclError:
+            pass
+
+    def _ensure_window_size(self) -> None:
+        """Не даёт окну из трея открыться слишком узким, без кнопки «Настройки»."""
+        min_width, min_height = 880, 520
+        try:
+            self.window.minsize(min_width, min_height)
+            self.window.update_idletasks()
+            width = max(self.window.winfo_width(), min_width)
+            height = max(self.window.winfo_height(), min_height)
+            if self.window.winfo_width() < min_width or self.window.winfo_height() < min_height:
+                self.window.geometry(f"{width}x{height}")
         except tk.TclError:
             pass
 
@@ -1038,11 +1131,13 @@ def main() -> None:
         logger.info("Выбранный движок: %s", get_engine_name())
         flush_logs()
         patch_pystray_win32()
+        enable_windows_dpi()
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
             "gelezyaka.OfflineTranslator"
         )
         root = tk.Tk()
         root.withdraw()
+        apply_ui_fonts(root)
         # Ссылка на приложение нужна, чтобы обработчики окна не уничтожил GC
         app = TranslatorApp(
             root,

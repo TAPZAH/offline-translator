@@ -55,6 +55,7 @@ hiddenimports = [
     "app_settings",
     "packages",
     "settings_window",
+    "ui_theme",
     "translation_engine",
     "translation_result",
     "threaded_engine",

@@ -244,7 +244,7 @@ cmake -DPACKAGE_DIR=cpp/portable-win32-lite -P cpp/cmake/CheckPortablePackage.cm
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\cpp\OfflineTranslatorCpp.iss
 ```
 
-Выход: `cpp/installer-output/offline-translator-cpp-0.99-beta-setup.exe`.
+Выход: `cpp/installer-output/offline-translator-cpp-0.995-beta-setup.exe`.
 Python-упаковка (`build_portable.py`, `OfflineTranslator.iss`) не меняется.
 Деинсталлятор C++ удаляет `{app}` и `{app}\data`, но **не**
 `%USERPROFILE%\.local\share\offline-translator`. Автозагрузка Run

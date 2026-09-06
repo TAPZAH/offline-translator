@@ -10,7 +10,7 @@ from language_packages import LanguagePackage
 
 CHUNK_SIZE = 64 * 1024
 REQUEST_TIMEOUT = (15, 300)
-REQUEST_HEADERS = {"User-Agent": "offline-translator/0.99-beta (marian-mt)"}
+REQUEST_HEADERS = {"User-Agent": "offline-translator/0.995-beta (marian-mt)"}
 MIN_MODEL_BIN_BYTES = 10 * 1024 * 1024
 CT2_CONFIG = {
     "add_source_bos": False,

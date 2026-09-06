@@ -1,8 +1,8 @@
 # Оффлайн Переводчик / Offline Translator
 
-Оффлайн-переводчик для Windows. Работает без интернета после установки языковых моделей. Версия **beta 0.99**. Автор: **TAP3AH**.
+Оффлайн-переводчик для Windows. Работает без интернета после установки языковых моделей. Версия **beta 0.995**. Автор: **TAP3AH**.
 
-Offline translator for Windows. Works without internet after language models are installed. Version **beta 0.99**. Author: **TAP3AH**.
+Offline translator for Windows. Works without internet after language models are installed. Version **beta 0.995**. Author: **TAP3AH**.
 
 ## Возможности
 
@@ -20,13 +20,13 @@ Offline translator for Windows. Works without internet after language models are
 
 ## Скачать для Windows 10/11 (64-bit)
 
-Файлы релиза (без языковых моделей; пакеты ставятся из окна «Пакеты» / «Языки...»):
+Файлы релиза (без языковых моделей; пакеты ставятся из «Настройки» → «Языки»):
 
 | Файл | Что внутри |
 |------|------------|
-| `offline-translator-0.99-beta-setup.exe` | Установщик |
-| `offline-translator-0.99-beta-portable.zip` | Портативная папка, Python не нужен |
-| `offline-translator-0.99-beta-src.zip` | Исходники |
+| `offline-translator-0.995-beta-setup.exe` | Установщик |
+| `offline-translator-0.995-beta-portable.zip` | Портативная папка, Python не нужен |
+| `offline-translator-0.995-beta-src.zip` | Исходники |
 
 После распаковки портатива откройте `OfflineTranslator.exe` или `offline_translator_win32.exe`. Папки `_internal` / `assets`, `data` и `licenses` удалять нельзя.
 

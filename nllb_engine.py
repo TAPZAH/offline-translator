@@ -57,7 +57,7 @@ class NllbEngine(ThreadedEngine):
             missing = needed_pairs_for_path(source_code, target_code)
             if missing:
                 raise RuntimeError(
-                    "Нет модели NLLB. Установите NLLB-200 Distilled 600M в «Языки»."
+                    "Нет модели NLLB. Установите NLLB-200 Distilled 600M в «Настройки» → «Языки»."
                 )
             raise RuntimeError(f"NLLB не переводит {source_code} → {target_code}")
 
@@ -86,7 +86,7 @@ class NllbEngine(ThreadedEngine):
         if state["translator"] is not None and state["sp"] is not None:
             return
         if not is_model_installed():
-            raise RuntimeError("Модель NLLB не установлена. Откройте «Языки».")
+            raise RuntimeError("Модель NLLB не установлена. Откройте «Настройки» → «Языки».")
         import ctranslate2
 
         from sentencepiece_io import load_sentencepiece_processor

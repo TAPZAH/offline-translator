@@ -88,7 +88,8 @@ class NllbEngine(ThreadedEngine):
         if not is_model_installed():
             raise RuntimeError("Модель NLLB не установлена. Откройте «Языки».")
         import ctranslate2
-        import sentencepiece as spm
+
+        from sentencepiece_io import load_sentencepiece_processor
 
         root = model_path()
         state["translator"] = ctranslate2.Translator(
@@ -96,9 +97,7 @@ class NllbEngine(ThreadedEngine):
             device="cpu",
             compute_type="int8",
         )
-        processor = spm.SentencePieceProcessor()
-        processor.load(str(root / "sentencepiece.bpe.model"))
-        state["sp"] = processor
+        state["sp"] = load_sentencepiece_processor(root / "sentencepiece.bpe.model")
 
 
 _engine: NllbEngine | None = None

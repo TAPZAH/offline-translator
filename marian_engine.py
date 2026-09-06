@@ -120,7 +120,8 @@ class MarianEngine(ThreadedEngine):
         from app_logging import flush_logs, get_logger
 
         import ctranslate2
-        import sentencepiece as spm
+
+        from sentencepiece_io import load_sentencepiece_processor
 
         model_dir = pair_path(source_code, target_code)
         get_logger().info(
@@ -135,10 +136,12 @@ class MarianEngine(ThreadedEngine):
             device="cpu",
             compute_type="auto",
         )
-        source_sp = spm.SentencePieceProcessor()
-        source_sp.load(str(source_tokenizer_path(source_code, target_code)))
-        target_sp = spm.SentencePieceProcessor()
-        target_sp.load(str(target_tokenizer_path(source_code, target_code)))
+        source_sp = load_sentencepiece_processor(
+            source_tokenizer_path(source_code, target_code)
+        )
+        target_sp = load_sentencepiece_processor(
+            target_tokenizer_path(source_code, target_code)
+        )
         packed = (translator, source_sp, target_sp)
         state["translators"][key] = packed
         get_logger().info("Модель MarianMT %s → %s загружена", source_code, target_code)

@@ -20,7 +20,7 @@ public:
             packages_root, source_code, target_code);
         model_manager.validate();
         tokenizer = std::make_unique<SentencePieceTokenizer>(
-            model_manager.tokenizer_path().string());
+            model_manager.tokenizer_path());
         auto* tokenizer_ptr = tokenizer.get();
         engine = std::make_unique<CTranslate2Engine>(
             model_manager.model_path().string(),

@@ -20,9 +20,9 @@ public:
             models_root, source_code, target_code);
         model_manager.validate();
         source_tokenizer = std::make_unique<SentencePieceTokenizer>(
-            model_manager.source_tokenizer_path().string());
+            model_manager.source_tokenizer_path());
         target_tokenizer = std::make_unique<SentencePieceTokenizer>(
-            model_manager.target_tokenizer_path().string());
+            model_manager.target_tokenizer_path());
         auto* source_ptr = source_tokenizer.get();
         auto* target_ptr = target_tokenizer.get();
         engine = std::make_unique<CTranslate2Engine>(

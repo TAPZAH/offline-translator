@@ -47,6 +47,7 @@ hiddenimports = [
     "firefox_engine",
     "argos_engine",
     "argos_packages",
+    "sentencepiece_io",
     "nllb_engine",
     "nllb_packages",
     "marian_engine",

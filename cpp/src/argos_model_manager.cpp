@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -37,14 +38,16 @@ const std::array<PackageInfo, 2> kEmbeddedCatalog{{
      "Russian",
      "translate-en_ru-1_9",
      "argos",
-     "https://data.argosopentech.com/argospm/v1/translate-en_ru-1_9.argosmodel"},
+     "https://data.argosopentech.com/argospm/v1/translate-en_ru-1_9.argosmodel",
+     {"https://data.argosopentech.com/argospm/v1/translate-en_ru-1_9.argosmodel"}},
     {"ru",
      "en",
      "Russian",
      "English",
      "translate-ru_en-1_9",
      "argos",
-     "https://data.argosopentech.com/argospm/v1/translate-ru_en-1_9.argosmodel"},
+     "https://data.argosopentech.com/argospm/v1/translate-ru_en-1_9.argosmodel",
+     {"https://data.argosopentech.com/argospm/v1/translate-ru_en-1_9.argosmodel"}},
 }};
 
 std::mutex& catalog_mutex() {
@@ -97,9 +100,10 @@ std::string version_dirname_suffix(std::string version) {
     return version;
 }
 
-std::string first_http_link(const nlohmann::json& item) {
+std::vector<std::string> http_links(const nlohmann::json& item) {
+    std::vector<std::string> urls;
     if (!item.contains("links") || !item["links"].is_array()) {
-        return {};
+        return urls;
     }
     for (const auto& link : item["links"]) {
         if (!link.is_string()) {
@@ -107,10 +111,33 @@ std::string first_http_link(const nlohmann::json& item) {
         }
         auto url = link.get<std::string>();
         if (is_http_url(url)) {
-            return url;
+            urls.push_back(std::move(url));
         }
     }
-    return {};
+    return urls;
+}
+
+std::string first_http_link(const nlohmann::json& item) {
+    const auto urls = http_links(item);
+    return urls.empty() ? std::string{} : urls.front();
+}
+
+// argos-net.com из индекса часто недоступен; зеркало совпадает с Python.
+std::string data_argos_mirror(const std::string& dirname) {
+    if (dirname.empty()) {
+        return {};
+    }
+    return "https://data.argosopentech.com/argospm/v1/" + dirname +
+           ".argosmodel";
+}
+
+void append_unique_url(std::vector<std::string>& urls, std::string url) {
+    if (url.empty()) {
+        return;
+    }
+    if (std::find(urls.begin(), urls.end(), url) == urls.end()) {
+        urls.push_back(std::move(url));
+    }
 }
 
 PackageInfo package_from_index_item(const nlohmann::json& item) {
@@ -123,6 +150,9 @@ PackageInfo package_from_index_item(const nlohmann::json& item) {
     const auto dirname =
         code + "-" +
         version_dirname_suffix(item.value("package_version", std::string()));
+    auto urls = http_links(item);
+    append_unique_url(urls, data_argos_mirror(dirname));
+    const std::string first = urls.empty() ? std::string{} : urls.front();
     return PackageInfo{
         from_code,
         to_code,
@@ -130,7 +160,8 @@ PackageInfo package_from_index_item(const nlohmann::json& item) {
         item.value("to_name", to_code),
         dirname,
         "argos",
-        first_http_link(item),
+        first,
+        std::move(urls),
     };
 }
 
@@ -478,16 +509,21 @@ void ArgosModelManager::download_and_install(const ProgressCallback& progress) {
     }
 
     const auto catalog = catalog_entry();
-    std::string url = package_url_override_;
     std::string dirname =
         package_prefix() + std::string(kDefaultPackageVersion);
-    if (catalog.has_value()) {
-        if (url.empty()) {
-            url = catalog->download_url;
-        }
-        dirname = catalog->dirname;
+    std::vector<std::string> urls;
+    if (!package_url_override_.empty()) {
+        append_unique_url(urls, package_url_override_);
     }
-    if (url.empty()) {
+    if (catalog.has_value()) {
+        dirname = catalog->dirname;
+        for (const auto& catalog_url : catalog->download_urls) {
+            append_unique_url(urls, catalog_url);
+        }
+        append_unique_url(urls, catalog->download_url);
+    }
+    append_unique_url(urls, data_argos_mirror(dirname));
+    if (urls.empty()) {
         throw std::runtime_error(
             "Пакет Argos " + source_code_ + " → " + target_code_ +
             " не найден в каталоге");
@@ -498,7 +534,7 @@ void ArgosModelManager::download_and_install(const ProgressCallback& progress) {
     if (progress) {
         progress(0, 1, "Скачиваю пакет Argos...");
     }
-    download_resumable({url}, zip_path, progress, "Скачиваю пакет Argos");
+    download_resumable(urls, zip_path, progress, "Скачиваю пакет Argos");
 
     const auto extract_root = downloads_path() / ("extract-" + dirname);
     fs_utils::remove_tree(extract_root);

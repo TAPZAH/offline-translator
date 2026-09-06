@@ -2,15 +2,44 @@
 
 #include <sentencepiece_processor.h>
 
+#include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <utility>
 
 namespace offline_translator {
+namespace {
+
+std::string path_text(const std::filesystem::path& path) {
+    const auto utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
+}
+
+std::string read_model_proto(const std::filesystem::path& model_path) {
+    // ifstream на Windows открывает путь через wchar_t; Load() SentencePiece —
+    // нет, и падает на каталогах с кириллицей.
+    std::ifstream input(model_path, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error(
+            "Не удалось открыть SentencePiece: " + path_text(model_path));
+    }
+    std::string proto(
+        (std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    if (proto.empty()) {
+        throw std::runtime_error(
+            "Пустой файл SentencePiece: " + path_text(model_path));
+    }
+    return proto;
+}
+
+}  // пространство имён
 
 class SentencePieceTokenizer::State {
 public:
-    explicit State(const std::string& model_path) {
-        const auto status = processor.Load(model_path);
+    explicit State(const std::filesystem::path& model_path) {
+        const auto status = processor.LoadFromSerializedProto(
+            read_model_proto(model_path));
         if (!status.ok()) {
             throw std::runtime_error(
                 "Не удалось загрузить SentencePiece: " + status.ToString());
@@ -20,7 +49,7 @@ public:
     sentencepiece::SentencePieceProcessor processor;
 };
 
-SentencePieceTokenizer::SentencePieceTokenizer(const std::string& model_path)
+SentencePieceTokenizer::SentencePieceTokenizer(std::filesystem::path model_path)
     : state_(std::make_unique<State>(model_path)) {}
 
 SentencePieceTokenizer::~SentencePieceTokenizer() = default;

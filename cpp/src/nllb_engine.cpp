@@ -15,7 +15,7 @@ public:
         NllbModelManager model_manager(models_root);
         model_manager.validate();
         tokenizer = std::make_unique<SentencePieceTokenizer>(
-            (model_manager.model_path() / "sentencepiece.bpe.model").string());
+            model_manager.model_path() / "sentencepiece.bpe.model");
         auto* tokenizer_ptr = tokenizer.get();
         engine = std::make_unique<CTranslate2Engine>(
             model_manager.model_path().string(),

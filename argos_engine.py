@@ -1,10 +1,13 @@
 import re
 
+from pathlib import Path
+
 from argos_packages import (
     get_installed_package,
     is_package_installed,
     needed_pairs_for_path,
 )
+from sentencepiece_io import ArgosSentencePieceTokenizer, load_sentencepiece_processor
 from threaded_engine import ThreadedEngine
 from translation_result import TranslationResult
 from translation_route import english_pivot_route, translate_with_english_pivot
@@ -76,13 +79,10 @@ class ArgosEngine(ThreadedEngine):
         pkg = get_installed_package(source_code, target_code)
         if pkg is None:
             raise RuntimeError(f"Нет пакета Argos {source_code} → {target_code}")
-        tokenizer = getattr(pkg, "tokenizer", None)
-        if tokenizer is None:
-            raise RuntimeError(
-                f"В пакете Argos {source_code} → {target_code} нет токенизатора"
-            )
 
-        translator = self._load_translator(state, pkg, source_code, target_code)
+        translator, tokenizer = self._load_translator(
+            state, pkg, source_code, target_code
+        )
         sentences = _split_sentences(text)
         tokenized = [tokenizer.encode(sentence) for sentence in sentences]
         results = translator.translate_batch(
@@ -102,7 +102,7 @@ class ArgosEngine(ThreadedEngine):
         return translated
 
     def _load_translator(self, state, pkg, source_code: str, target_code: str):
-        """Создаёт CTranslate2 Translator один раз на пару языков."""
+        """Создаёт CTranslate2 Translator и токенизатор один раз на пару."""
         key = (source_code, target_code)
         cached = state["translators"].get(key)
         if cached is not None:
@@ -110,6 +110,7 @@ class ArgosEngine(ThreadedEngine):
         from app_logging import flush_logs, get_logger
 
         model_dir = pkg.package_path / "model"
+        tokenizer_path = _argos_tokenizer_path(pkg)
         get_logger().info("Загрузка модели Argos %s → %s: %s", source_code, target_code, model_dir)
         flush_logs()
         import ctranslate2
@@ -119,9 +120,21 @@ class ArgosEngine(ThreadedEngine):
             device="cpu",
             compute_type="auto",
         )
-        state["translators"][key] = translator
+        tokenizer = ArgosSentencePieceTokenizer(
+            load_sentencepiece_processor(tokenizer_path)
+        )
+        packed = (translator, tokenizer)
+        state["translators"][key] = packed
         get_logger().info("Модель Argos %s → %s загружена", source_code, target_code)
-        return translator
+        return packed
+
+
+def _argos_tokenizer_path(pkg) -> Path:
+    """Путь к sentencepiece.model пакета, без вызова pkg.tokenizer."""
+    model_file = getattr(getattr(pkg, "tokenizer", None), "model_file", None)
+    if model_file is not None:
+        return Path(model_file)
+    return Path(pkg.package_path) / "sentencepiece.model"
 
 
 def _split_sentences(text: str) -> list[str]:

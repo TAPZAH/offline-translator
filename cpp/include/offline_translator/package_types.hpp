@@ -4,6 +4,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace offline_translator {
 
@@ -21,6 +22,7 @@ struct PackageInfo {
     std::string dirname;
     std::string architecture;
     std::string download_url;
+    std::vector<std::string> download_urls;
 };
 
 }  // пространство имён offline_translator

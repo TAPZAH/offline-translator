@@ -472,6 +472,17 @@ int main() {
             }
         }
         require(de_en_has_url, "у de→en есть URL и dirname пакета");
+        bool de_en_has_mirror = false;
+        for (const auto& item : catalog) {
+            if (item.from_code == "de" && item.to_code == "en") {
+                for (const auto& url : item.download_urls) {
+                    if (url.find("data.argosopentech.com") != std::string::npos) {
+                        de_en_has_mirror = true;
+                    }
+                }
+            }
+        }
+        require(de_en_has_mirror, "у de→en есть зеркало data.argosopentech.com");
         static_cast<void>(
             ArgosModelManager(argos_mgmt_root, "de", "en").has_incomplete_package());
     }

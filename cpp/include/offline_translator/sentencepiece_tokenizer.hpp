@@ -2,6 +2,7 @@
 
 #include "offline_translator/ctranslate2_engine.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <string>
 
@@ -9,7 +10,7 @@ namespace offline_translator {
 
 class SentencePieceTokenizer {
 public:
-    explicit SentencePieceTokenizer(const std::string& model_path);
+    explicit SentencePieceTokenizer(std::filesystem::path model_path);
     ~SentencePieceTokenizer();
 
     std::vector<std::string> tokenize(std::string_view text) const;

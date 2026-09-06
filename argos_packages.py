@@ -1,4 +1,5 @@
 import shutil
+from pathlib import Path
 
 from language_detect import language_display_name
 from language_packages import LanguagePackage
@@ -15,6 +16,39 @@ def invalidate_cache() -> None:
     _installed_pair_set = None
 
 
+def _iter_installed_packages():
+    """Обходит установленные пакеты Argos, пропуская служебные каталоги.
+
+    argostranslate.package.get_installed_packages() падает целиком, если
+    рядом лежит _downloads или любая папка без metadata.json.
+    """
+    from argostranslate import package, settings
+
+    roots = list(getattr(settings, "package_dirs", None) or [])
+    if not roots:
+        package_dir = getattr(settings, "package_data_dir", None)
+        if package_dir is not None:
+            roots = [package_dir]
+    for root in roots:
+        directory = Path(root)
+        if not directory.is_dir():
+            continue
+        try:
+            children = list(directory.iterdir())
+        except OSError:
+            continue
+        for path in children:
+            if not path.is_dir() or path.name == "_downloads":
+                continue
+            try:
+                item = package.Package(path)
+            except Exception:
+                continue
+            if getattr(item, "type", "translate") != "translate":
+                continue
+            yield item
+
+
 def get_installed_pairs() -> list[tuple[str, str, str, str]]:
     """Возвращает установленные пары Argos Translate."""
     global _installed_pairs_cache, _installed_pair_set
@@ -22,11 +56,7 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
         return _installed_pairs_cache
     pairs: list[tuple[str, str, str, str]] = []
     try:
-        from argostranslate import package
-
-        for item in package.get_installed_packages():
-            if getattr(item, "type", "translate") != "translate":
-                continue
+        for item in _iter_installed_packages():
             from_code = item.from_code
             to_code = item.to_code
             if not from_code or not to_code:
@@ -55,11 +85,7 @@ def get_installed_pairs() -> list[tuple[str, str, str, str]]:
 def get_installed_package(from_code: str, to_code: str):
     """Возвращает установленный пакет Argos для пары языков."""
     try:
-        from argostranslate import package
-
-        for item in package.get_installed_packages():
-            if getattr(item, "type", "translate") != "translate":
-                continue
+        for item in _iter_installed_packages():
             if item.from_code == from_code and item.to_code == to_code:
                 return item
     except Exception as error:
@@ -198,6 +224,18 @@ def download_and_install(language_package, progress_callback=None) -> None:
 
     if progress_callback:
         progress_callback(0, 1, "Скачиваю пакет Argos...")
+    # argos-net.com часто недоступен; добавляем зеркало data.argosopentech.com.
+    links = list(getattr(argos_package, "links", None) or [])
+    code = getattr(argos_package, "code", None) or f"translate-{from_code}_{to_code}"
+    version = str(getattr(argos_package, "package_version", "1.9") or "1.9")
+    dirname = f"{code}-{version.replace('.', '_')}"
+    mirror = f"https://data.argosopentech.com/argospm/v1/{dirname}.argosmodel"
+    if mirror not in links:
+        links.append(mirror)
+    try:
+        argos_package.links = links
+    except Exception:
+        pass
     download_path = argos_package.download()
     if progress_callback:
         progress_callback(1, 1, "Устанавливаю пакет Argos...")

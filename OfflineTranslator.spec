@@ -49,6 +49,8 @@ hiddenimports = [
     "argos_packages",
     "nllb_engine",
     "nllb_packages",
+    "marian_engine",
+    "marian_packages",
     "app_settings",
     "packages",
     "settings_window",

@@ -20,7 +20,7 @@ if (ENABLE_CTRANSLATE2)
     endif()
     if (NOT CTranslate2_BUILD_DIR)
         set(CTranslate2_BUILD_DIR
-            "${CTranslate2_ROOT}/build-openblas/ctranslate2")
+            "${CTranslate2_ROOT}/build-openblas-dnnl/ctranslate2")
     endif()
     # find_package иначе может взять закэшированный CTranslate2_DIR
     # от другой сборки (например C:/deps/CTranslate2/build без OpenBLAS).
@@ -76,6 +76,7 @@ if (ENABLE_CTRANSLATE2)
 endif()
 
 add_library(offline_translator_core
+    src/app_log.cpp
     src/app_settings.cpp
     src/argos_engine.cpp
     src/argos_model_manager.cpp
@@ -88,6 +89,8 @@ add_library(offline_translator_core
     src/fs_utils.cpp
     src/hotkey.cpp
     src/language_store.cpp
+    src/marian_engine.cpp
+    src/marian_model_manager.cpp
     src/nllb_model_manager.cpp
     src/nllb_language.cpp
     src/nllb_engine.cpp
@@ -136,6 +139,9 @@ if (ENABLE_CTRANSLATE2)
     add_executable(argos_smoke
         tools/argos_smoke.cpp
     )
+    add_executable(marian_smoke
+        tools/marian_smoke.cpp
+    )
     add_executable(translator_cli
         tools/translator_cli.cpp
     )
@@ -153,6 +159,11 @@ if (ENABLE_CTRANSLATE2)
             ${SENTENCEPIECE_INCLUDE_DIR}
     )
     target_include_directories(argos_smoke
+        PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/include
+            ${SENTENCEPIECE_INCLUDE_DIR}
+    )
+    target_include_directories(marian_smoke
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${SENTENCEPIECE_INCLUDE_DIR}
@@ -189,6 +200,19 @@ if (ENABLE_CTRANSLATE2)
             absl::flags
     )
     target_link_libraries(argos_smoke
+        PRIVATE
+            offline_translator_core
+            CTranslate2::ctranslate2
+            sentencepiece_compat
+            protobuf::libprotobuf
+            absl::base
+            absl::strings
+            absl::raw_hash_set
+            absl::synchronization
+            absl::log
+            absl::flags
+    )
+    target_link_libraries(marian_smoke
         PRIVATE
             offline_translator_core
             CTranslate2::ctranslate2
@@ -257,17 +281,19 @@ if (ENABLE_CTRANSLATE2)
                 )
             endforeach()
         endif()
-        set(_selection_png "${CMAKE_CURRENT_SOURCE_DIR}/../assets/icon.png")
-        if (EXISTS "${_selection_png}")
-            add_custom_command(TARGET offline_translator_win32 POST_BUILD
-                COMMAND "${CMAKE_COMMAND}" -E make_directory
-                    "$<TARGET_FILE_DIR:offline_translator_win32>/assets"
-                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                    "${_selection_png}"
-                    "$<TARGET_FILE_DIR:offline_translator_win32>/assets/icon.png"
-                COMMENT "Копирование assets/icon.png рядом с GUI"
-            )
-        endif()
+        foreach (_icon_png IN ITEMS icon.png icon-light.png icon-dark.png)
+            set(_selection_png "${CMAKE_CURRENT_SOURCE_DIR}/../assets/${_icon_png}")
+            if (EXISTS "${_selection_png}")
+                add_custom_command(TARGET offline_translator_win32 POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E make_directory
+                        "$<TARGET_FILE_DIR:offline_translator_win32>/assets"
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${_selection_png}"
+                        "$<TARGET_FILE_DIR:offline_translator_win32>/assets/${_icon_png}"
+                    COMMENT "Копирование assets/${_icon_png} рядом с GUI"
+                )
+            endif()
+        endforeach()
     endif()
 endif()
 
@@ -338,6 +364,7 @@ if (MSVC)
     if (ENABLE_CTRANSLATE2)
         target_compile_options(nllb_smoke PRIVATE /EHsc /permissive- /utf-8)
         target_compile_options(argos_smoke PRIVATE /EHsc /permissive- /utf-8)
+        target_compile_options(marian_smoke PRIVATE /EHsc /permissive- /utf-8)
         target_compile_options(translator_cli PRIVATE /EHsc /permissive- /utf-8)
         if (TARGET offline_translator_win32)
             target_compile_options(offline_translator_win32 PRIVATE /EHsc /permissive- /utf-8)
@@ -381,6 +408,7 @@ if (ENABLE_CTRANSLATE2 AND WIN32)
     foreach (_runtime_target IN ITEMS
         nllb_smoke
         argos_smoke
+        marian_smoke
         translator_cli
         firefox_smoke
         offline_translator_win32
@@ -431,6 +459,15 @@ if (ENABLE_CTRANSLATE2 AND WIN32 AND TARGET nllb_smoke)
             )
             set_tests_properties(argos_cli_smoke PROPERTIES TIMEOUT 30)
         endif()
+    endif()
+    set(MARIAN_MODELS_ROOT
+        "$ENV{USERPROFILE}/.local/share/offline-translator/marian-models")
+    if (EXISTS "${MARIAN_MODELS_ROOT}/en-ru/model.bin")
+        add_test(
+            NAME marian_cli_smoke
+            COMMAND marian_smoke "${MARIAN_MODELS_ROOT}"
+        )
+        set_tests_properties(marian_cli_smoke PROPERTIES TIMEOUT 60)
     endif()
     set(FIREFOX_MODELS_ROOT
         "$ENV{USERPROFILE}/.local/share/offline-translator/firefox-models")

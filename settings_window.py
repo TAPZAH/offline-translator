@@ -1,15 +1,19 @@
 import tkinter as tk
 from tkinter import ttk
 
+from app_version import APP_PUBLISHER, APP_VERSION_DISPLAY
 from autostart import is_autostart_enabled, set_autostart
 from app_logging import get_logger, log_exception
 from app_settings import (
     ENGINE_ARGOS,
+    ENGINE_MARIAN,
     ENGINE_NLLB,
     ENGINE_LABELS,
     POPUP_MODIFIERS,
     RESULT_WINDOW_CLICK_TO_CLOSE,
     RESULT_WINDOW_SELECTABLE,
+    UI_THEME_DARK,
+    UI_THEME_LIGHT,
     engine_from_label,
     engine_label,
     get_double_ctrl_c_translation,
@@ -17,13 +21,15 @@ from app_settings import (
     get_popup_modifier,
     get_result_window_mode,
     get_selection_popup_enabled,
+    get_ui_theme,
     set_double_ctrl_c_translation,
     set_engine_name,
     set_popup_modifier,
     set_result_window_mode,
     set_selection_popup_enabled,
+    set_ui_theme,
 )
-from selection_button import TRAY_ICON_PATH
+from selection_button import overlay_theme, theme_icon_path
 
 
 class SettingsWindow:
@@ -34,23 +40,62 @@ class SettingsWindow:
         self.window = tk.Toplevel(master)
         self.window.title("Настройки")
         self._set_window_icon()
-        self.window.geometry("520x640")
-        self.window.minsize(500, 620)
+        self.window.geometry("520x760")
+        self.window.minsize(500, 720)
         self.window.transient(master)
         self.window.grab_set()
         self._create_widgets()
+        self._apply_theme()
 
     def _set_window_icon(self) -> None:
-        """Устанавливает иконку трея в заголовок окна настроек."""
+        """Устанавливает ту же иконку, что у трея и окна перевода."""
         self._window_icon = None
         try:
             self._window_icon = tk.PhotoImage(
-                file=TRAY_ICON_PATH,
+                file=theme_icon_path(),
                 master=self.window,
             )
             self.window.iconphoto(True, self._window_icon)
         except (tk.TclError, OSError):
             self._window_icon = None
+
+    def _apply_theme(self) -> None:
+        """Красит окно настроек в белый или чёрный фон темы."""
+        theme = overlay_theme()
+        self.window.configure(bg=theme["bg"])
+        self._color_widget_tree(self.window, theme)
+
+    def _color_widget_tree(self, widget: tk.Misc, theme: dict[str, str]) -> None:
+        """Рекурсивно красит tk-виджеты, не трогая ttk."""
+        widget_type = widget.winfo_class()
+        if widget_type.startswith("T"):
+            return
+        try:
+            if widget_type in {"Frame", "Labelframe", "Toplevel"}:
+                widget.configure(bg=theme["bg"])
+                if widget_type == "Labelframe":
+                    widget.configure(fg=theme["text"])
+            elif widget_type == "Label":
+                widget.configure(bg=theme["bg"], fg=theme["text"])
+            elif widget_type in {"Checkbutton", "Radiobutton"}:
+                widget.configure(
+                    bg=theme["bg"],
+                    fg=theme["text"],
+                    activebackground=theme["bg"],
+                    activeforeground=theme["text"],
+                    selectcolor=theme["button"],
+                )
+            elif widget_type == "Button":
+                widget.configure(
+                    bg=theme["button"],
+                    fg=theme["text"],
+                    activebackground=theme["button_hover"],
+                    activeforeground=theme["text"],
+                )
+        except tk.TclError:
+            pass
+        for child in widget.winfo_children():
+            self._color_widget_tree(child, theme)
 
     def _create_widgets(self) -> None:
         """Создаёт выбор движка и параметры приложения."""
@@ -163,6 +208,27 @@ class SettingsWindow:
             anchor=tk.W,
         ).pack(fill=tk.X, padx=(12, 0))
 
+        tk.Label(
+            selection_frame,
+            text="Тема:",
+            anchor=tk.W,
+        ).pack(fill=tk.X, pady=(10, 2))
+        self.ui_theme_var = tk.StringVar(value=get_ui_theme())
+        tk.Radiobutton(
+            selection_frame,
+            text="Светлая",
+            variable=self.ui_theme_var,
+            value=UI_THEME_LIGHT,
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=(12, 0))
+        tk.Radiobutton(
+            selection_frame,
+            text="Тёмная",
+            variable=self.ui_theme_var,
+            value=UI_THEME_DARK,
+            anchor=tk.W,
+        ).pack(fill=tk.X, padx=(12, 0))
+
         launch_frame = tk.LabelFrame(
             self.window,
             text="Запуск",
@@ -178,6 +244,24 @@ class SettingsWindow:
             anchor=tk.W,
         ).pack(fill=tk.X)
 
+        about_frame = tk.LabelFrame(
+            self.window,
+            text="О программе",
+            padx=8,
+            pady=6,
+        )
+        about_frame.pack(fill=tk.X, padx=12, pady=(10, 4))
+        tk.Label(
+            about_frame,
+            text=f"Версия: {APP_VERSION_DISPLAY}",
+            anchor=tk.W,
+        ).pack(fill=tk.X)
+        tk.Label(
+            about_frame,
+            text=f"Автор: {APP_PUBLISHER}",
+            anchor=tk.W,
+        ).pack(fill=tk.X)
+
         self.status_var = tk.StringVar(value="")
         tk.Label(self.window, textvariable=self.status_var, anchor=tk.W).pack(
             fill=tk.X, padx=12, pady=(8, 4)
@@ -189,6 +273,7 @@ class SettingsWindow:
         tk.Button(buttons, text="Отмена", command=self.window.destroy).pack(
             side=tk.RIGHT
         )
+
     def _on_only_ctrl_c_c_changed(self) -> None:
         """Режим «только Ctrl+C+C» всегда включает перевод по двойному C."""
         if self.only_ctrl_c_c_var.get():
@@ -201,6 +286,10 @@ class SettingsWindow:
             self.status_var.set("Argos использует свои пакеты .argosmodel.")
         elif engine == ENGINE_NLLB:
             self.status_var.set("NLLB ставится одним пакетом в «Языки» (~600 МБ).")
+        elif engine == ENGINE_MARIAN:
+            self.status_var.set(
+                "MarianMT — модели Helsinki-NLP OPUS-MT, пакет на каждую пару."
+            )
         else:
             self.status_var.set("")
 
@@ -217,6 +306,7 @@ class SettingsWindow:
             set_selection_popup_enabled(not self.only_ctrl_c_c_var.get())
             set_double_ctrl_c_translation(self.double_ctrl_c_var.get())
             set_result_window_mode(self.result_window_mode_var.get())
+            set_ui_theme(self.ui_theme_var.get())
             set_autostart(bool(self.autostart_var.get()))
             get_logger().info("Сохранены настройки, движок=%s", engine)
             self.on_settings_changed()

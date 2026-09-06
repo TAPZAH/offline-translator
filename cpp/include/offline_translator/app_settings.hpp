@@ -30,7 +30,12 @@ struct AppSettings {
     std::string translate_hotkey{"Ctrl+Shift+T"};
     // Размер моделей Firefox Translations: tiny | base (как в Python).
     std::string architecture{"tiny"};
+    // light | dark — оформление окна перевода, меню и иконок.
+    std::string ui_theme{"light"};
 };
+
+inline constexpr std::string_view kUiThemeLight = "light";
+inline constexpr std::string_view kUiThemeDark = "dark";
 
 std::filesystem::path default_data_root();
 std::filesystem::path default_settings_path();
@@ -42,5 +47,6 @@ void save_settings(const std::filesystem::path& path, const AppSettings& setting
 
 EngineKind engine_kind_from_settings(std::string_view engine);
 std::string settings_engine_name(EngineKind engine_kind);
+std::string normalize_ui_theme(std::string_view theme);
 
 }  // пространство имён offline_translator

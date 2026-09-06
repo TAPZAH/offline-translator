@@ -1,5 +1,6 @@
 #include "offline_translator/firefox_model_manager.hpp"
 
+#include "offline_translator/app_log.hpp"
 #include "compression.hpp"
 #include "file_transfer.hpp"
 #include "fs_utils.hpp"
@@ -10,6 +11,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <fstream>
+#include <mutex>
 #include <stdexcept>
 
 #ifdef _WIN32
@@ -40,6 +42,11 @@ constexpr const char* kGcsModels =
     "https://storage.googleapis.com/"
     "moz-fx-translations-data--303e-prod-translations-data/"
     "firefox-ci/models/";
+constexpr const char* kRemoteSettings =
+    "https://firefox.settings.services.mozilla.com/v1/buckets/main/"
+    "collections/translations-models/records";
+constexpr const char* kFirefoxCdn =
+    "https://firefox-settings-attachments.cdn.mozilla.net/";
 
 const std::vector<std::string>& fallback_dirs(std::string_view architecture) {
     static const std::vector<std::string> tiny{
@@ -179,6 +186,142 @@ void save_catalog(
     fs_utils::write_text_file(
         catalog_path(root),
         array.dump(2));
+}
+
+struct FirefoxCdnFile {
+    std::string from;
+    std::string to;
+    std::string architecture;
+    std::string name;
+    std::string url;
+};
+
+std::string record_language(const json& record, const char* primary, const char* fallback) {
+    if (record.contains(primary) && record[primary].is_string()) {
+        return normalize_language(record[primary].get<std::string>());
+    }
+    if (record.contains(fallback) && record[fallback].is_string()) {
+        return normalize_language(record[fallback].get<std::string>());
+    }
+    return {};
+}
+
+std::vector<FirefoxCdnFile> load_remote_settings_files() {
+    static std::mutex mutex;
+    static std::vector<FirefoxCdnFile> cache;
+    static bool loaded = false;
+    std::lock_guard lock(mutex);
+    if (loaded) {
+        return cache;
+    }
+    loaded = true;
+    const auto temp = std::filesystem::temp_directory_path() /
+        ("fx-remote-settings-" + std::to_string(::GetTickCount64()) + ".json");
+    try {
+        download_resumable(
+            {kRemoteSettings},
+            temp,
+            {},
+            "Каталог Firefox Remote Settings");
+    } catch (const std::exception& error) {
+        app_log_warn(std::string("Remote Settings недоступен: ") + error.what());
+        return cache;
+    }
+    std::ifstream in(temp, std::ios::binary);
+    std::string raw((std::istreambuf_iterator<char>(in)),
+                    std::istreambuf_iterator<char>());
+    std::error_code ignored;
+    std::filesystem::remove(temp, ignored);
+    try {
+        const auto parsed = json::parse(raw);
+        const json* items = nullptr;
+        if (parsed.is_object() && parsed.contains("data") &&
+            parsed["data"].is_array()) {
+            items = &parsed["data"];
+        } else if (parsed.is_array()) {
+            items = &parsed;
+        }
+        if (!items) {
+            return cache;
+        }
+        for (const auto& record : *items) {
+            if (!record.is_object()) {
+                continue;
+            }
+            const auto from = record_language(record, "fromLang", "sourceLanguage");
+            const auto to = record_language(record, "toLang", "targetLanguage");
+            auto architecture = record.value("architecture", std::string{"tiny"});
+            if (!FirefoxModelManager::is_architecture(architecture) &&
+                architecture != "base-memory") {
+                continue;
+            }
+            std::string name = record.value("name", std::string{});
+            std::string location;
+            if (record.contains("attachment") && record["attachment"].is_object()) {
+                location = record["attachment"].value("location", std::string{});
+                if (name.empty()) {
+                    name = record["attachment"].value("filename", std::string{});
+                }
+            }
+            if (from.empty() || to.empty() || location.empty()) {
+                continue;
+            }
+            FirefoxCdnFile file;
+            file.from = from;
+            file.to = to;
+            file.architecture = architecture;
+            file.name = name;
+            file.url = std::string(kFirefoxCdn) + location;
+            while (!file.url.empty() && file.url.back() == '/') {
+                file.url.pop_back();
+            }
+            cache.push_back(std::move(file));
+        }
+        app_log_info(
+            "Remote Settings: файлов=" + std::to_string(cache.size()));
+    } catch (const std::exception& error) {
+        app_log_warn(std::string("Remote Settings не разобран: ") + error.what());
+    }
+    return cache;
+}
+
+std::vector<std::pair<std::string, bool>> cdn_urls_for_file(
+    std::string_view from_code,
+    std::string_view to_code,
+    std::string_view architecture,
+    const std::string& remote_name) {
+    const std::string stem = remote_name.size() > 3 &&
+            remote_name.substr(remote_name.size() - 3) == ".gz"
+        ? remote_name.substr(0, remote_name.size() - 3)
+        : remote_name;
+    const auto from = normalize_language(std::string(from_code));
+    const auto to = normalize_language(std::string(to_code));
+    std::vector<std::string> architectures{std::string(architecture)};
+    if (architecture == "base") {
+        architectures.emplace_back("base-memory");
+    }
+    std::vector<std::pair<std::string, bool>> urls;
+    for (const auto& file : load_remote_settings_files()) {
+        if (file.from != from || file.to != to) {
+            continue;
+        }
+        bool architecture_ok = false;
+        for (const auto& item : architectures) {
+            if (file.architecture == item) {
+                architecture_ok = true;
+                break;
+            }
+        }
+        if (!architecture_ok) {
+            continue;
+        }
+        if (file.name != stem && file.name != remote_name &&
+            file.name.find(stem) == std::string::npos) {
+            continue;
+        }
+        urls.emplace_back(file.url, true);
+    }
+    return urls;
 }
 
 // Список файлов пары через GitHub contents API; пустой результат —
@@ -555,9 +698,20 @@ std::uintmax_t download_and_decompress(
         throw std::runtime_error("Скачан слишком маленький файл");
     }
     std::vector<std::uint8_t> data;
-    const bool ok = zst_encoded
+    bool ok = zst_encoded
         ? compression::zunstd(payload.data(), payload.size(), data)
         : compression::gunzip(payload.data(), payload.size(), data);
+    if (!ok || data.size() < 500) {
+        data.clear();
+        ok = zst_encoded
+            ? compression::gunzip(payload.data(), payload.size(), data)
+            : compression::zunstd(payload.data(), payload.size(), data);
+    }
+    if ((!ok || data.size() < 500) && payload.size() >= 10000) {
+        // Remote Settings иногда отдаёт уже распакованный файл.
+        data = std::move(payload);
+        ok = true;
+    }
     if (!ok || data.size() < 500) {
         throw std::runtime_error(
             "Не удалось распаковать файл модели: " + url);
@@ -641,7 +795,8 @@ void FirefoxModelManager::download_and_install(const ProgressCallback& progress)
         }
         const std::string stem =
             remote_name.substr(0, remote_name.size() - 3);
-        std::vector<std::pair<std::string, bool>> urls;
+        std::vector<std::pair<std::string, bool>> urls =
+            cdn_urls_for_file(source_code_, target_code_, architecture_, remote_name);
         const auto add_architecture_variants =
             [&](const std::string& architecture) {
                 urls.emplace_back(
@@ -664,13 +819,19 @@ void FirefoxModelManager::download_and_install(const ProgressCallback& progress)
         }
         bool downloaded = false;
         std::string last_error;
+        app_log_info(
+            "Firefox файл " + remote_name + " источников=" +
+            std::to_string(urls.size()));
         for (const auto& [url, zst_encoded] : urls) {
             try {
                 download_and_decompress(url, zst_encoded, staging / *target, progress);
                 downloaded = true;
+                app_log_info("Firefox скачан " + remote_name);
                 break;
             } catch (const std::exception& error) {
                 last_error = error.what();
+                app_log_warn(
+                    "Firefox источник не подошёл " + url + ": " + last_error);
             }
         }
         if (downloaded) {

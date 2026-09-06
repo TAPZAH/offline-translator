@@ -2,7 +2,13 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from app_settings import ENGINE_ARGOS, ENGINE_FIREFOX, ENGINE_NLLB, get_engine_name
+from app_settings import (
+    ENGINE_ARGOS,
+    ENGINE_FIREFOX,
+    ENGINE_MARIAN,
+    ENGINE_NLLB,
+    get_engine_name,
+)
 from language_detect import language_display_name
 from language_packages import (
     ARCHITECTURE_LABELS,
@@ -63,6 +69,12 @@ class LanguagesWindow:
                 "NLLB-200 — одна модель на 200 языков. Скачайте пакет один раз, "
                 "после этого доступны все пары. Повреждённую модель удалите "
                 "или скачайте заново."
+            )
+        elif engine == ENGINE_MARIAN:
+            hint_text = (
+                "MarianMT — модели Helsinki-NLP OPUS-MT через CTranslate2. "
+                "Нет прямой пары — перевод пойдёт через английский. "
+                "Установленный пакет можно удалить или скачать заново."
             )
         else:
             hint_text = "Установите языковые пакеты текущего движка."

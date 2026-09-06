@@ -4,6 +4,8 @@
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/firefox_engine.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
+#include "offline_translator/marian_engine.hpp"
+#include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/nllb_engine.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/translation_service.hpp"
@@ -30,6 +32,8 @@ public:
             engine = std::make_unique<FirefoxEngine>(
                 models_root,
                 engine_variant.empty() ? std::string{"tiny"} : engine_variant);
+        } else if (engine_kind == EngineKind::marian) {
+            engine = std::make_unique<MarianEngine>(models_root);
         } else {
             throw std::invalid_argument("Неизвестный тип движка");
         }
@@ -48,6 +52,13 @@ public:
                                models_root,
                                engine_variant.empty() ? std::string{"tiny"}
                                                       : engine_variant,
+                               std::string(source),
+                               std::string(target))
+                        .is_installed();
+                }
+                if (engine_kind == EngineKind::marian) {
+                    return MarianModelManager(
+                               models_root,
                                std::string(source),
                                std::string(target))
                         .is_installed();
@@ -153,6 +164,18 @@ void TranslationApplication::uninstall_package(
             .uninstall();
         return;
     }
+    if (state_->engine_kind == EngineKind::marian) {
+        if (source_code.empty() || target_code.empty()) {
+            throw std::invalid_argument(
+                "Для удаления пакета MarianMT нужны коды языков");
+        }
+        MarianModelManager(
+            state_->models_root,
+            std::string(source_code),
+            std::string(target_code))
+            .uninstall();
+        return;
+    }
     if (source_code.empty() || target_code.empty()) {
         throw std::invalid_argument(
             "Для удаления пакета Argos нужны коды языков");
@@ -173,6 +196,9 @@ std::string TranslationApplication::engine_name(EngineKind engine_kind) {
     }
     if (engine_kind == EngineKind::firefox) {
         return "Firefox";
+    }
+    if (engine_kind == EngineKind::marian) {
+        return "MarianMT";
     }
     throw std::invalid_argument("Неизвестный тип движка");
 }

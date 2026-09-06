@@ -7,12 +7,14 @@ import portable_env
 ENGINE_FIREFOX = "firefox"
 ENGINE_ARGOS = "argos"
 ENGINE_NLLB = "nllb"
+ENGINE_MARIAN = "marian"
 ENGINE_LABELS = {
     ENGINE_ARGOS: "Argos Translate",
     ENGINE_NLLB: "NLLB-200",
     ENGINE_FIREFOX: "Firefox Translations",
+    ENGINE_MARIAN: "MarianMT",
 }
-ENGINES = (ENGINE_ARGOS, ENGINE_NLLB, ENGINE_FIREFOX)
+ENGINES = (ENGINE_ARGOS, ENGINE_NLLB, ENGINE_FIREFOX, ENGINE_MARIAN)
 DEFAULT_ENGINE = ENGINE_ARGOS
 ARCHITECTURES = ("tiny", "base")
 DEFAULT_ARCHITECTURE = "tiny"
@@ -28,6 +30,10 @@ RESULT_WINDOW_MODES = (
     RESULT_WINDOW_SELECTABLE,
 )
 DEFAULT_RESULT_WINDOW_MODE = RESULT_WINDOW_CLICK_TO_CLOSE
+UI_THEME_LIGHT = "light"
+UI_THEME_DARK = "dark"
+UI_THEMES = (UI_THEME_LIGHT, UI_THEME_DARK)
+DEFAULT_UI_THEME = UI_THEME_LIGHT
 
 _settings_cache: dict | None = None
 
@@ -92,7 +98,7 @@ def _save_settings(data: dict) -> None:
 
 
 def get_engine_name() -> str:
-    """Возвращает выбранный движок: firefox, argos или nllb."""
+    """Возвращает выбранный движок: firefox, argos, nllb или marian."""
     engine = _load_settings().get("engine")
     if engine in ENGINES:
         return engine
@@ -276,4 +282,21 @@ def set_result_window_mode(mode: str) -> None:
         raise ValueError(f"Неизвестный режим окна результата: {mode}")
     data = dict(_load_settings())
     data["result_window_mode"] = mode
+    _save_settings(data)
+
+
+def get_ui_theme() -> str:
+    """Возвращает тему оформления: light или dark."""
+    theme = _load_settings().get("ui_theme")
+    if theme in UI_THEMES:
+        return theme
+    return DEFAULT_UI_THEME
+
+
+def set_ui_theme(theme: str) -> None:
+    """Сохраняет светлую или тёмную тему."""
+    if theme not in UI_THEMES:
+        raise ValueError(f"Неизвестная тема: {theme}")
+    data = dict(_load_settings())
+    data["ui_theme"] = theme
     _save_settings(data)

@@ -14,7 +14,7 @@ HF_REPO = "mijuanlo/nllb-200-distilled-600M-ct2-int8"
 HF_FILES = ("model.bin", "shared_vocabulary.json", "sentencepiece.bpe.model")
 CHUNK_SIZE = 64 * 1024
 REQUEST_TIMEOUT = (15, 300)
-REQUEST_HEADERS = {"User-Agent": "offline-translator/0.98-beta (nllb-200)"}
+REQUEST_HEADERS = {"User-Agent": "offline-translator/0.99-beta (nllb-200)"}
 # Distilled 600M int8 весит около 622 МБ; меньше — обрезанная или битая загрузка
 MIN_MODEL_BIN_BYTES = 500 * 1024 * 1024
 

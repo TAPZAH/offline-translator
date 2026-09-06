@@ -7,11 +7,15 @@ from PIL import Image
 import selection_button
 from app_settings import RESULT_WINDOW_CLICK_TO_CLOSE, RESULT_WINDOW_SELECTABLE
 from selection_button import (
+    ICON_DARK_PATH,
+    ICON_LIGHT_PATH,
     ICON_SIZE,
     SELECTION_ICON_PATH,
-    TRAY_ICON_PATH,
     SelectionPopup,
+    overlay_theme,
+    theme_icon_path,
     _flatten_icon_for_window,
+    _style_overlay_window,
     choose_selection_direction,
     should_capture_selection,
     should_show_selection_button,
@@ -21,8 +25,8 @@ from selection_button import (
 
 
 def test_recycle_icon_file() -> None:
-    """Проверяет, что иконки выделения и трея квадратные."""
-    for path in (SELECTION_ICON_PATH, TRAY_ICON_PATH):
+    """Проверяет, что иконки светлой и тёмной темы квадратные и общие."""
+    for path in (ICON_LIGHT_PATH, ICON_DARK_PATH, theme_icon_path(), SELECTION_ICON_PATH):
         image = Image.open(path)
         width, height = image.size
         assert width == height, (path, width, height)
@@ -32,13 +36,37 @@ def test_recycle_icon_file() -> None:
 
 def test_icon_center_is_clickable() -> None:
     """Центр знака не должен быть цветом-ключом, иначе клик проваливается."""
-    image = Image.open(SELECTION_ICON_PATH).convert("RGBA")
+    image = Image.open(theme_icon_path()).convert("RGBA")
     image = image.resize((ICON_SIZE, ICON_SIZE), Image.Resampling.LANCZOS)
     flattened = _flatten_icon_for_window(image)
     center = flattened.getpixel((ICON_SIZE // 2, ICON_SIZE // 2))
     if center == (255, 0, 255):
         raise AssertionError("Центр иконки прозрачный — клик провалится")
     print(f"icon-center: ok {center}")
+
+
+def test_overlay_theme_opaque() -> None:
+    """Светлая и тёмная темы дают непрозрачное окно с контрастной рамкой."""
+    original = selection_button.get_ui_theme
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        selection_button.get_ui_theme = lambda: "light"
+        light = overlay_theme()
+        assert light["bg"] == "#ffffff" and light["border"] == "#000000"
+        assert light["text"] == "#000000"
+        selection_button.get_ui_theme = lambda: "dark"
+        dark = overlay_theme()
+        assert dark["bg"] == "#000000" and dark["border"] == "#ffffff"
+        assert dark["text"] == "#ffffff"
+        window = tk.Toplevel(root)
+        _style_overlay_window(window)
+        assert float(window.attributes("-alpha")) == 1.0
+        window.destroy()
+    finally:
+        selection_button.get_ui_theme = original
+        root.destroy()
+    print("overlay-theme: ok")
 
 
 def test_direction() -> None:
@@ -253,6 +281,7 @@ def test_real_translate() -> None:
 if __name__ == "__main__":
     test_recycle_icon_file()
     test_icon_center_is_clickable()
+    test_overlay_theme_opaque()
     test_direction()
     test_should_capture_selection()
     test_ctrl_activation_rules()

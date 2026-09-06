@@ -54,7 +54,11 @@ from app_version import window_title
 from language_detect import detect_language_code, language_display_name
 from languages_window import LanguagesWindow
 from packages import get_installed_pairs, needed_pairs_for_path
-from selection_button import TRAY_ICON_PATH, SelectionPopup, choose_selection_direction
+from selection_button import (
+    SelectionPopup,
+    choose_selection_direction,
+    theme_icon_path,
+)
 from settings_window import SettingsWindow
 from translation_engine import get_engine, invalidate_engines
 
@@ -827,8 +831,8 @@ class TranslatorApp:
         self.translate_button.config(state=tk.NORMAL)
 
     def _create_tray_image_file(self) -> str:
-        """Готовит иконку трея из файла icon-tray.png."""
-        with Image.open(TRAY_ICON_PATH) as opened:
+        """Готовит иконку трея из той же PNG, что и кнопка перевода."""
+        with Image.open(theme_icon_path()) as opened:
             image = opened.convert("RGBA")
         image = image.resize((64, 64), Image.Resampling.LANCZOS)
 

@@ -1,22 +1,4 @@
 {
   "version": 1,
-  "hooks": {
-    "subagentStop": [
-      {
-        "command": "node .cursor/hooks/migration-supervisor.js",
-        "timeout": 10,
-        "loop_limit": 8,
-        "failClosed": false
-      }
-    ],
-    "stop": [
-      {
-        "command": "node .cursor/hooks/migration-supervisor.js",
-        "timeout": 10,
-        "loop_limit": 8,
-        "failClosed": false,
-        "matcher": "Stop"
-      }
-    ]
-  }
+  "hooks": {}
 }

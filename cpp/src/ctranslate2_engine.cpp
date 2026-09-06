@@ -1,5 +1,6 @@
 #include "offline_translator/ctranslate2_engine.hpp"
 
+#include "offline_translator/app_log.hpp"
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/route_planner.hpp"
 #include "offline_translator/text_split.hpp"
@@ -7,6 +8,7 @@
 #include <ctranslate2/translator.h>
 
 #include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -35,10 +37,15 @@ private:
     static std::unique_ptr<ctranslate2::Translator> create(
         const std::string& model_path,
         ctranslate2::ComputeType compute_type) {
+        // Потоки не задаём: 0 = как в Python (intra_threads по умолчанию).
+        // На OpenMP+oneDNN это omp_set_num_threads(auto); на noomp-сборке
+        // ручная раскладка по всем ядрам только усиливает конфликт пулов.
         return std::make_unique<ctranslate2::Translator>(
             model_path,
             ctranslate2::Device::CPU,
-            compute_type);
+            compute_type,
+            std::vector<int>{0},
+            false);
     }
 };
 
@@ -110,7 +117,15 @@ std::optional<std::string> CTranslate2Engine::translation_route(
 
 void CTranslate2Engine::ensure_loaded() {
     if (!state_) {
+        app_log_info(
+            std::string("загрузка CTranslate2 ") +
+            (nllb_model_ ? "nllb " : "argos ") + model_path_);
+        const auto started = std::chrono::steady_clock::now();
         state_ = std::make_unique<CTranslate2State>(model_path_, nllb_model_);
+        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - started)
+                            .count();
+        app_log_info("модель CTranslate2 загружена ms=" + std::to_string(ms));
     }
 }
 
@@ -154,7 +169,7 @@ std::string CTranslate2Engine::translate_direct(
         throw std::runtime_error("Токенизатор вернул пустой результат");
     }
 
-    // Как в Python: Argos beam_size=2; NLLB beam_size=2 и max_decoding_length=512.
+    // Как в Python: Argos и NLLB — beam_size=2; у NLLB ещё max_decoding_length=512.
     ctranslate2::TranslationOptions options;
     options.beam_size = 2;
     options.replace_unknowns = true;

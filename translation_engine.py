@@ -1,6 +1,7 @@
 from app_settings import (
     ENGINE_ARGOS,
     ENGINE_FIREFOX,
+    ENGINE_MARIAN,
     ENGINE_NLLB,
     ENGINES,
     get_engine_name,
@@ -26,6 +27,10 @@ def get_engine():
             from firefox_engine import get_engine as get_firefox_engine
 
             return get_firefox_engine()
+        if engine == ENGINE_MARIAN:
+            from marian_engine import get_engine as get_marian_engine
+
+            return get_marian_engine()
         raise RuntimeError(
             f"Движок {engine!r} отключён. Доступны: {', '.join(ENGINES)}"
         )
@@ -36,7 +41,12 @@ def get_engine():
 
 def invalidate_engines(*, timeout: float = 30) -> None:
     """Останавливает старые движки, чтобы не копить потоки и модели в памяти."""
-    for module_name in ("firefox_engine", "argos_engine", "nllb_engine"):
+    for module_name in (
+        "firefox_engine",
+        "argos_engine",
+        "nllb_engine",
+        "marian_engine",
+    ):
         try:
             module = __import__(module_name)
             engine = getattr(module, "_engine", None)

@@ -13,6 +13,7 @@ enum class EngineKind {
     argos,
     nllb,
     firefox,
+    marian,
 };
 
 class TranslationApplication {

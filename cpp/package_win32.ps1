@@ -1,6 +1,6 @@
 ﻿param(
     [string]$BuildDir = "$PSScriptRoot\build-ctranslate2",
-    [string]$CTranslate2Dir = "C:\deps\CTranslate2\build-openblas\Release",
+    [string]$CTranslate2Dir = "C:\deps\CTranslate2\build-openblas-dnnl\Release",
     [string]$OutputDir = "$PSScriptRoot\portable-win32-lite",
     [switch]$IncludeModels,
     [switch]$MigrateSettings,
@@ -288,11 +288,13 @@ try {
     New-Item -ItemType Directory -Path $assetsDir | Out-Null
     $iconSource = Join-Path $PSScriptRoot "..\assets\app.ico"
     Copy-RequiredFile $iconSource $assetsDir
-    $selectionIconSource = Join-Path $PSScriptRoot "..\assets\icon.png"
-    if (Test-Path -LiteralPath $selectionIconSource -PathType Leaf) {
-        Copy-RequiredFile $selectionIconSource $assetsDir
-    } else {
-        Write-Warning "Нет assets/icon.png — кнопка выделения будет без иконки"
+    foreach ($iconName in @("icon.png", "icon-light.png", "icon-dark.png")) {
+        $selectionIconSource = Join-Path $PSScriptRoot "..\assets\$iconName"
+        if (Test-Path -LiteralPath $selectionIconSource -PathType Leaf) {
+            Copy-RequiredFile $selectionIconSource $assetsDir
+        } else {
+            Write-Warning "Нет assets/$iconName — часть иконок темы будет недоступна"
+        }
     }
 
     $dataDir = Join-Path $OutputDir "data"

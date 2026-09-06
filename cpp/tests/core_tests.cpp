@@ -1,3 +1,4 @@
+#include "offline_translator/app_log.hpp"
 #include "offline_translator/app_settings.hpp"
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/autostart.hpp"
@@ -5,6 +6,7 @@
 #include "offline_translator/firefox_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/language_store.hpp"
+#include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/nllb_language.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
 #include "offline_translator/selection.hpp"
@@ -54,6 +56,15 @@ void write_argos_package_files(const std::filesystem::path& package) {
          }) {
         write_dummy_file(package / file_name);
     }
+}
+
+void write_marian_files(const std::filesystem::path& root, std::size_t model_size) {
+    std::filesystem::create_directories(root);
+    write_dummy_file(root / "model.bin", model_size);
+    write_dummy_file(root / "shared_vocabulary.json", 32);
+    write_dummy_file(root / "source.spm", 32);
+    write_dummy_file(root / "target.spm", 32);
+    write_dummy_file(root / "config.json", 32);
 }
 
 void write_nllb_files(const std::filesystem::path& root, std::size_t model_size) {
@@ -248,6 +259,46 @@ int main() {
     assert(argos_manager.package_path() == argos_package);
     assert(argos_manager.is_installed());
     std::filesystem::remove_all(argos_test_root);
+
+    const auto marian_root =
+        std::filesystem::temp_directory_path() / "offline-translator-marian-test";
+    std::filesystem::remove_all(marian_root);
+    {
+        MarianModelManager missing(marian_root, "en", "ru", 8);
+        require(!missing.is_installed(), "пустой корень Marian не установлен");
+        const auto catalog = MarianModelManager::available_packages();
+        bool has_en_ru = false;
+        for (const auto& item : catalog) {
+            if (item.from_code == "en" && item.to_code == "ru") {
+                has_en_ru = true;
+                require(item.architecture == "marian", "архитектура Marian");
+            }
+        }
+        require(has_en_ru, "каталог Marian содержит en→ru");
+        require(
+            engine_kind_from_settings("marian") == EngineKind::marian,
+            "settings marian → EngineKind");
+        require(
+            settings_engine_name(EngineKind::marian) == "marian",
+            "EngineKind marian → settings");
+    }
+    {
+        MarianModelManager manager(marian_root, "en", "ru", 8);
+        write_marian_files(manager.staging_path(), 16);
+        manager.install_from_staging();
+        require(manager.is_installed(), "Marian установлен из staging");
+        require(
+            manager.model_path().filename() == "en-ru",
+            "каталог пары Marian en-ru");
+        const auto installed =
+            MarianModelManager::installed_packages(marian_root);
+        require(!installed.empty(), "installed_packages видит Marian en-ru");
+        bool unloaded = false;
+        manager.uninstall([&] { unloaded = true; });
+        require(unloaded, "uninstall Marian вызывает выгрузку");
+        require(!manager.is_installed(), "Marian удалён");
+    }
+    std::filesystem::remove_all(marian_root);
 
     TranslationService service(is_installed, direct_translate, "Test");
     const auto direct = service.translate(" hello ", "ru", "en");
@@ -793,6 +844,7 @@ int main() {
         require(missing.engine == "argos", "engine по умолчанию");
         require(missing.source_language == "en", "язык источника по умолчанию");
         require(missing.target_language == "ru", "язык перевода по умолчанию");
+        require(missing.ui_theme == "light", "тема по умолчанию light");
         fs_utils::write_text_file(
             path,
             "{\n  \"engine\": \"argos\",\n  \"architecture\": \"tiny\",\n"
@@ -863,6 +915,21 @@ int main() {
         require(
             hotkey_roundtrip.result_window_mode == kResultWindowSelectable,
             "result_window_mode сохраняется");
+        require(
+            hotkey_roundtrip.ui_theme == "light",
+            "ui_theme по умолчанию light");
+        loaded.ui_theme = "dark";
+        save_settings(path, loaded);
+        const auto theme_roundtrip = load_settings(path);
+        require(
+            theme_roundtrip.ui_theme == "dark",
+            "ui_theme сохраняется");
+        require(
+            normalize_ui_theme("DARK") == "light",
+            "неизвестная тема становится light");
+        require(
+            normalize_ui_theme("dark") == "dark",
+            "dark нормализуется");
         {
             std::ifstream in(path);
             raw.assign(
@@ -917,6 +984,34 @@ int main() {
                 recovered.window_width == 0 && !recovered.popup_requires_ctrl,
             "неверные типы полей JSON не падают и дают значения по умолчанию");
         std::filesystem::remove_all(recover_dir);
+    }
+
+    {
+        const auto log_dir =
+            std::filesystem::temp_directory_path() / "offline-translator-app-log";
+        std::filesystem::remove_all(log_dir);
+        std::filesystem::create_directories(log_dir);
+        const auto path = log_dir / "app.log";
+        require(!app_log_enabled(), "журнал выключен до init");
+        init_app_log(path);
+        require(app_log_enabled(), "журнал включён после init");
+        require(app_log_path() == path, "путь журнала");
+        app_log_info("тест журнала");
+        app_log_warn("предупреждение");
+        std::string raw;
+        {
+            std::ifstream in(path);
+            raw.assign(
+                (std::istreambuf_iterator<char>(in)),
+                std::istreambuf_iterator<char>());
+        }
+        require(raw.find("[info] тест журнала") != std::string::npos, "info пишется");
+        require(
+            raw.find("[warn] предупреждение") != std::string::npos,
+            "warn пишется");
+        shutdown_app_log();
+        require(!app_log_enabled(), "журнал выключается");
+        std::filesystem::remove_all(log_dir);
     }
 
     {

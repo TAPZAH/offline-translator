@@ -12,11 +12,13 @@ from PIL import Image, ImageTk
 import portable_env
 from app_settings import (
     RESULT_WINDOW_CLICK_TO_CLOSE,
+    UI_THEME_DARK,
     get_double_ctrl_c_translation,
     get_popup_modifier,
     get_popup_requires_ctrl,
     get_result_window_mode,
     get_selection_popup_enabled,
+    get_ui_theme,
 )
 from language_detect import detect_language_code, language_display_name
 
@@ -43,18 +45,46 @@ CLIPBOARD_WAIT_S = 0.08
 DOUBLE_CTRL_C_S = 0.7
 ICON_SIZE = 40
 ASSETS_DIR = os.path.join(portable_env.resource_dir(), "assets")
+ICON_LIGHT_PATH = os.path.join(ASSETS_DIR, "icon-light.png")
+ICON_DARK_PATH = os.path.join(ASSETS_DIR, "icon-dark.png")
 SELECTION_ICON_PATH = os.path.join(ASSETS_DIR, "icon.png")
 TRAY_ICON_PATH = os.path.join(ASSETS_DIR, "icon-tray.png")
 ICON_TRANSPARENT = "#ff00ff"
-OVERLAY_BG = "#f2f2f2"
-OVERLAY_BORDER = "#000000"
-OVERLAY_TEXT = "#000000"
-OVERLAY_MUTED = "#333333"
-OVERLAY_COPY_BG = "#dedede"
-OVERLAY_COPY_HOVER = "#cccccc"
 OVERLAY_FONT = ("Segoe UI", 11)
 OVERLAY_FONT_SMALL = ("Segoe UI", 8)
 OVERLAY_FONT_BUTTON = ("Segoe UI", 9)
+
+
+def overlay_theme() -> dict[str, str]:
+    """Цвета окна перевода и меню для текущей темы."""
+    if get_ui_theme() == UI_THEME_DARK:
+        return {
+            "bg": "#000000",
+            "border": "#ffffff",
+            "text": "#ffffff",
+            "muted": "#ffffff",
+            "button": "#2a2a2a",
+            "button_hover": "#3d3d3d",
+        }
+    return {
+        "bg": "#ffffff",
+        "border": "#000000",
+        "text": "#000000",
+        "muted": "#000000",
+        "button": "#e6e6e6",
+        "button_hover": "#d0d0d0",
+    }
+
+
+def theme_icon_path() -> str:
+    """Одинаковая иконка трея и кнопки перевода для текущей темы."""
+    preferred = ICON_DARK_PATH if get_ui_theme() == UI_THEME_DARK else ICON_LIGHT_PATH
+    if os.path.isfile(preferred):
+        return preferred
+    for fallback in (SELECTION_ICON_PATH, TRAY_ICON_PATH):
+        if os.path.isfile(fallback):
+            return fallback
+    return preferred
 
 
 class POINT(ctypes.Structure):
@@ -263,12 +293,13 @@ def capture_selected_text() -> str:
 
 
 def _style_overlay_window(window: tk.Toplevel) -> None:
-    """Делает окно поверх всех, без рамки и слегка прозрачным."""
+    """Делает окно перевода непрозрачным, поверх всех и без рамки ОС."""
+    theme = overlay_theme()
     window.overrideredirect(True)
     window.attributes("-topmost", True)
-    window.configure(bg=OVERLAY_BORDER)
+    window.configure(bg=theme["border"])
     try:
-        window.attributes("-alpha", 0.97)
+        window.attributes("-alpha", 1.0)
     except tk.TclError:
         pass
 
@@ -356,6 +387,7 @@ class SelectionPopup:
         self._close_button: tk.Button | None = None
         self._result_text: tk.Text | None = None
         self._icon_photo: ImageTk.PhotoImage | None = None
+        self._icon_theme: str | None = None
         self._is_translating = False
         self._hide_job = None
         self._capture_job = None
@@ -392,14 +424,16 @@ class SelectionPopup:
             return None
 
     def _load_recycle_icon(self) -> ImageTk.PhotoImage:
-        """Загружает иконку выделения без фона для прозрачного окна."""
-        if self._icon_photo is not None:
+        """Загружает ту же тематическую иконку, что и трей."""
+        theme = get_ui_theme()
+        if self._icon_photo is not None and self._icon_theme == theme:
             return self._icon_photo
-        with Image.open(SELECTION_ICON_PATH) as opened:
+        with Image.open(theme_icon_path()) as opened:
             image = opened.convert("RGBA")
         image = image.resize((ICON_SIZE, ICON_SIZE), Image.Resampling.LANCZOS)
         flattened = _flatten_icon_for_window(image)
         self._icon_photo = ImageTk.PhotoImage(flattened, master=self.root)
+        self._icon_theme = theme
         return self._icon_photo
 
     def _drain_ui_jobs(self) -> None:
@@ -685,17 +719,18 @@ class SelectionPopup:
             self._ui_jobs.put(lambda message=str(error): self._show_error(message))
 
     def _show_result(self, translated: str, source_code: str, target_code: str) -> None:
-        """Показывает светлое окно с переводом."""
+        """Показывает непрозрачное окно перевода в текущей теме."""
         self._is_translating = False
         self._hide_button()
         self._hide_result()
         result_mode = get_result_window_mode()
+        theme = overlay_theme()
         result_window = tk.Toplevel(self.root)
         _style_overlay_window(result_window)
         cursor_x, cursor_y = _cursor_position()
         result_window.geometry(f"+{cursor_x + 12}+{cursor_y + 12}")
 
-        inner = tk.Frame(result_window, bg=OVERLAY_BG, padx=16, pady=14)
+        inner = tk.Frame(result_window, bg=theme["bg"], padx=16, pady=14)
         inner.pack(padx=1, pady=1)
         header = tk.Label(
             inner,
@@ -704,8 +739,8 @@ class SelectionPopup:
                 f"{language_display_name(target_code)}"
             ),
             anchor=tk.W,
-            bg=OVERLAY_BG,
-            fg=OVERLAY_MUTED,
+            bg=theme["bg"],
+            fg=theme["muted"],
             font=OVERLAY_FONT_SMALL,
         )
         header.pack(fill=tk.X, pady=(0, 6))
@@ -718,8 +753,8 @@ class SelectionPopup:
             width=40,
             height=min(12, max(2, visual_lines)),
             wrap=tk.WORD,
-            bg=OVERLAY_BG,
-            fg=OVERLAY_TEXT,
+            bg=theme["bg"],
+            fg=theme["text"],
             font=OVERLAY_FONT,
             relief=tk.FLAT,
             bd=0,
@@ -741,17 +776,17 @@ class SelectionPopup:
             except Exception:
                 pass
 
-        buttons = tk.Frame(inner, bg=OVERLAY_BG)
+        buttons = tk.Frame(inner, bg=theme["bg"])
         buttons.pack(fill=tk.X, pady=(12, 0))
         copy_button = tk.Button(
             buttons,
             text="Копировать",
             command=copy_result,
             cursor="hand2",
-            bg=OVERLAY_COPY_BG,
-            fg=OVERLAY_TEXT,
-            activebackground=OVERLAY_COPY_HOVER,
-            activeforeground=OVERLAY_TEXT,
+            bg=theme["button"],
+            fg=theme["text"],
+            activebackground=theme["button_hover"],
+            activeforeground=theme["text"],
             relief=tk.FLAT,
             bd=0,
             highlightthickness=0,
@@ -762,11 +797,11 @@ class SelectionPopup:
         copy_button.pack(side=tk.RIGHT)
         copy_button.bind(
             "<Enter>",
-            lambda _event: copy_button.config(bg=OVERLAY_COPY_HOVER),
+            lambda _event: copy_button.config(bg=theme["button_hover"]),
         )
         copy_button.bind(
             "<Leave>",
-            lambda _event: copy_button.config(bg=OVERLAY_COPY_BG),
+            lambda _event: copy_button.config(bg=theme["button"]),
         )
         close_button = None
         if result_mode != RESULT_WINDOW_CLICK_TO_CLOSE:
@@ -775,10 +810,10 @@ class SelectionPopup:
                 text="Закрыть",
                 command=self._hide_result,
                 cursor="hand2",
-                bg=OVERLAY_COPY_BG,
-                fg=OVERLAY_TEXT,
-                activebackground=OVERLAY_COPY_HOVER,
-                activeforeground=OVERLAY_TEXT,
+                bg=theme["button"],
+                fg=theme["text"],
+                activebackground=theme["button_hover"],
+                activeforeground=theme["text"],
                 relief=tk.FLAT,
                 bd=0,
                 highlightthickness=0,
@@ -789,11 +824,11 @@ class SelectionPopup:
             close_button.pack(side=tk.RIGHT, padx=(0, 8))
             close_button.bind(
                 "<Enter>",
-                lambda _event: close_button.config(bg=OVERLAY_COPY_HOVER),
+                lambda _event: close_button.config(bg=theme["button_hover"]),
             )
             close_button.bind(
                 "<Leave>",
-                lambda _event: close_button.config(bg=OVERLAY_COPY_BG),
+                lambda _event: close_button.config(bg=theme["button"]),
             )
         result_window.bind("<Escape>", lambda _event: self._hide_result())
         self._copy_button = copy_button

@@ -94,7 +94,8 @@ bool read_bool(const nlohmann::json& data, const char* key, bool fallback) {
 
 std::string read_engine(const nlohmann::json& data) {
     const auto engine = read_string(data, "engine", "argos");
-    if (engine == "nllb" || engine == "argos" || engine == "firefox") {
+    if (engine == "nllb" || engine == "argos" || engine == "firefox" ||
+        engine == "marian") {
         return engine;
     }
     return "argos";
@@ -129,6 +130,10 @@ std::string read_translate_hotkey(const nlohmann::json& data) {
         return format_hotkey(*parsed);
     }
     return std::string{kDefaultTranslateHotkey};
+}
+
+std::string read_ui_theme(const nlohmann::json& data) {
+    return normalize_ui_theme(read_string(data, "ui_theme", "light"));
 }
 
 std::string read_popup_modifier(const nlohmann::json& data) {
@@ -202,6 +207,7 @@ AppSettings load_settings(const std::filesystem::path& path) {
         settings.result_window_mode = read_result_window_mode(data);
         settings.translate_hotkey = read_translate_hotkey(data);
         settings.architecture = read_architecture(data);
+        settings.ui_theme = read_ui_theme(data);
     } catch (...) {
         return AppSettings{};
     }
@@ -241,6 +247,7 @@ void save_settings(
     if (settings.architecture == "tiny" || settings.architecture == "base") {
         data["architecture"] = settings.architecture;
     }
+    data["ui_theme"] = normalize_ui_theme(settings.ui_theme);
     fs_utils::write_text_file(path, data.dump(2) + "\n");
 }
 
@@ -251,7 +258,17 @@ EngineKind engine_kind_from_settings(std::string_view engine) {
     if (engine == "firefox") {
         return EngineKind::firefox;
     }
+    if (engine == "marian") {
+        return EngineKind::marian;
+    }
     return EngineKind::argos;
+}
+
+std::string normalize_ui_theme(std::string_view theme) {
+    if (theme == kUiThemeDark) {
+        return std::string{kUiThemeDark};
+    }
+    return std::string{kUiThemeLight};
 }
 
 std::string settings_engine_name(EngineKind engine_kind) {
@@ -263,6 +280,9 @@ std::string settings_engine_name(EngineKind engine_kind) {
     }
     if (engine_kind == EngineKind::firefox) {
         return "firefox";
+    }
+    if (engine_kind == EngineKind::marian) {
+        return "marian";
     }
     throw std::invalid_argument("Неизвестный тип движка");
 }

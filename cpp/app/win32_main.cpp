@@ -1,8 +1,11 @@
+#include "offline_translator/app_log.hpp"
 #include "offline_translator/app_settings.hpp"
+#include "offline_translator/app_version.hpp"
 #include "offline_translator/argos_model_manager.hpp"
 #include "offline_translator/autostart.hpp"
 #include "offline_translator/clipboard.hpp"
 #include "offline_translator/firefox_model_manager.hpp"
+#include "offline_translator/marian_model_manager.hpp"
 #include "offline_translator/hotkey.hpp"
 #include "offline_translator/language_store.hpp"
 #include "offline_translator/nllb_model_manager.hpp"
@@ -20,8 +23,10 @@
 #include <shellapi.h>
 #include <commctrl.h>
 #include <gdiplus.h>
+#include <uxtheme.h>
 
 #pragma comment(lib, "gdiplus.lib")
+#pragma comment(lib, "uxtheme.lib")
 
 #include <algorithm>
 #include <array>
@@ -51,6 +56,7 @@ constexpr UINT kPackageDoneMessage = WM_APP + 4;
 constexpr UINT kPackageIndexMessage = WM_APP + 5;
 constexpr UINT kTrayMessage = WM_APP + 10;
 constexpr UINT kSelectionResultMessage = WM_APP + 11;
+constexpr UINT kRecoverInputMessage = WM_APP + 20;
 constexpr UINT kSelectionPollTimer = 1;
 constexpr UINT kSelectionButtonHideTimer = 2;
 constexpr int kEngineCombo = 1001;
@@ -78,6 +84,8 @@ constexpr int kSettingsSave = 1207;
 constexpr int kSettingsCancel = 1208;
 constexpr int kSettingsPopupModifier = 1209;
 constexpr int kSettingsOnlyCtrlCC = 1210;
+constexpr int kSettingsThemeLight = 1211;
+constexpr int kSettingsThemeDark = 1212;
 constexpr int kResultCopyButton = 1302;
 constexpr int kResultCloseButton = 1303;
 constexpr int kShowWindowHotkey = 2001;
@@ -113,21 +121,37 @@ HWND g_settings_click_to_close = nullptr;
 HWND g_settings_selectable = nullptr;
 HWND g_settings_autostart = nullptr;
 HWND g_settings_hotkey_edit = nullptr;
+HWND g_settings_theme_light = nullptr;
+HWND g_settings_theme_dark = nullptr;
 HWND g_selection_button = nullptr;
 HWND g_result_popup = nullptr;
 HWND g_popup_result_edit = nullptr;
 HWND g_popup_copy_button = nullptr;
 bool g_button_uses_icon = false;
 constexpr int kSelectionIconSize = 40;
-constexpr COLORREF kPopupBackground = RGB(242, 242, 242);
-constexpr COLORREF kPopupBorder = RGB(0, 0, 0);
-constexpr COLORREF kPopupHeaderText = RGB(51, 51, 51);
-constexpr COLORREF kButtonFace = RGB(222, 222, 222);
-constexpr COLORREF kButtonHover = RGB(204, 204, 204);
-bool g_smoke_mode = false;bool g_start_minimized = false;
+
+struct UiTheme {
+    COLORREF background;
+    COLORREF border;
+    COLORREF text;
+    COLORREF header;
+    COLORREF button_face;
+    COLORREF button_hover;
+    COLORREF button_text;
+};
+
+bool is_dark_theme();
+UiTheme current_ui_theme();
+HBRUSH theme_background_brush();
+
+bool g_smoke_mode = false;
+bool g_start_minimized = false;
 bool g_tray_added = false;
 HICON g_tray_icon = nullptr;
 NOTIFYICONDATAW g_tray_data{};
+std::atomic<std::uint64_t> g_last_poll_tick{0};
+std::atomic<std::uint64_t> g_last_heartbeat_tick{0};
+std::uint64_t g_app_start_tick = 0;
 
 struct StatusPayload {
     std::wstring text;
@@ -135,10 +159,12 @@ struct StatusPayload {
 };
 
 void sel_log(const std::string& line);
+std::string runtime_flags();
 
 struct PackageRow {
     bool nllb{false};
     bool firefox{false};
+    bool marian{false};
     std::string architecture;
     std::string from_code;
     std::string to_code;
@@ -292,6 +318,15 @@ std::wstring firefox_model_root() {
     return profile + L"\\.local\\share\\offline-translator\\firefox-models";
 }
 
+std::wstring marian_model_root() {
+    const std::wstring portable_data = executable_directory() + L"\\data";
+    if (GetFileAttributesW(portable_data.c_str()) != INVALID_FILE_ATTRIBUTES) {
+        return portable_data + L"\\marian-models";
+    }
+    const std::wstring profile = user_profile();
+    return profile + L"\\.local\\share\\offline-translator\\marian-models";
+}
+
 std::filesystem::path model_root_for_kind(
     offline_translator::EngineKind kind) {
     switch (kind) {
@@ -299,6 +334,8 @@ std::filesystem::path model_root_for_kind(
             return model_root_path(true);
         case offline_translator::EngineKind::firefox:
             return std::filesystem::path(firefox_model_root());
+        case offline_translator::EngineKind::marian:
+            return std::filesystem::path(marian_model_root());
         case offline_translator::EngineKind::argos:
             break;
     }
@@ -397,11 +434,16 @@ std::string selected_language(HWND combo) {
 
 offline_translator::EngineKind selected_engine() {
     const LRESULT index = SendMessageW(g_engine_combo, CB_GETCURSEL, 0, 0);
+    if (index == 1) {
+        return offline_translator::EngineKind::nllb;
+    }
     if (index == 2) {
         return offline_translator::EngineKind::firefox;
     }
-    return index == 1 ? offline_translator::EngineKind::nllb
-                      : offline_translator::EngineKind::argos;
+    if (index == 3) {
+        return offline_translator::EngineKind::marian;
+    }
+    return offline_translator::EngineKind::argos;
 }
 
 int engine_combo_index(offline_translator::EngineKind kind) {
@@ -410,6 +452,8 @@ int engine_combo_index(offline_translator::EngineKind kind) {
             return 1;
         case offline_translator::EngineKind::firefox:
             return 2;
+        case offline_translator::EngineKind::marian:
+            return 3;
         case offline_translator::EngineKind::argos:
             break;
     }
@@ -589,6 +633,8 @@ void layout_main(HWND window) {
 
 void start_translation(HWND window) {
     if (!g_runtime || g_runtime->busy.exchange(true)) {
+        offline_translator::app_log_warn(
+            "перевод окна пропущен: уже выполняется " + runtime_flags());
         return;
     }
     const std::wstring source_text = control_text(g_source_edit);
@@ -598,6 +644,9 @@ void start_translation(HWND window) {
     const std::string target_language = selected_language(
         g_target_language_combo);
     const std::string text = to_utf8(source_text);
+    offline_translator::app_log_info(
+        "перевод окна старт chars=" + std::to_string(text.size()) + " " +
+        source_language + "→" + target_language + " " + runtime_flags());
     const auto root = model_root_for_kind(engine_kind);
     const std::string engine_variant =
         engine_kind == offline_translator::EngineKind::firefox
@@ -610,6 +659,7 @@ void start_translation(HWND window) {
     std::thread(
         [window, text, root, engine_kind, engine_variant, source_language, target_language, runtime]() {
             auto result = std::make_unique<StatusPayload>();
+            const auto started = GetTickCount64();
             try {
                 std::lock_guard lock(runtime->mutex);
                 if (runtime->closing) {
@@ -619,6 +669,7 @@ void start_translation(HWND window) {
                 auto& application =
                     runtime->session.acquire(engine_kind, root, engine_variant);
                 if (!runtime->session.is_loaded()) {
+                    offline_translator::app_log_info("загрузка модели окна");
                     post_status(window, "Загрузка модели...");
                 } else {
                     post_status(window, "Перевод выполняется...");
@@ -631,10 +682,18 @@ void start_translation(HWND window) {
                         .text);
                 runtime->session.mark_loaded();
                 post_status(window, "Готово");
+                offline_translator::app_log_info(
+                    "перевод окна готов ms=" +
+                    std::to_string(GetTickCount64() - started) +
+                    " out_chars=" + std::to_string(result->text.size()));
             } catch (const std::exception& error) {
                 result->failed = true;
                 result->text = from_utf8(error.what());
                 post_status(window, "Ошибка перевода");
+                offline_translator::app_log_error(
+                    std::string("перевод окна ошибка ms=") +
+                    std::to_string(GetTickCount64() - started) + " " +
+                    error.what());
             }
             runtime->busy = false;
             if (runtime->closing || !IsWindow(window)) {
@@ -690,6 +749,54 @@ std::vector<PackageRow> collect_package_rows() {
         row.installed = row.installed || entry.installed;
         row.incomplete = row.incomplete || entry.incomplete;
         rows.push_back(std::move(row));
+    }
+    if (g_runtime &&
+        selected_engine() == offline_translator::EngineKind::marian) {
+        rows.clear();
+        const auto marian_root = std::filesystem::path(marian_model_root());
+        const auto catalog =
+            offline_translator::MarianModelManager::available_packages();
+        const auto installed =
+            offline_translator::MarianModelManager::installed_packages(
+                marian_root);
+        std::vector<offline_translator::StorePair> marian_pairs;
+        std::set<std::pair<std::string, std::string>> seen;
+        for (const auto& item : installed) {
+            offline_translator::StorePair pair;
+            pair.from_code = item.from_code;
+            pair.to_code = item.to_code;
+            pair.installed = true;
+            marian_pairs.push_back(pair);
+            seen.emplace(item.from_code, item.to_code);
+        }
+        for (const auto& item : catalog) {
+            if (seen.count({item.from_code, item.to_code}) > 0) {
+                continue;
+            }
+            offline_translator::StorePair pair;
+            pair.from_code = item.from_code;
+            pair.to_code = item.to_code;
+            marian_pairs.push_back(std::move(pair));
+        }
+        for (auto& pair : marian_pairs) {
+            offline_translator::MarianModelManager manager(
+                marian_root, pair.from_code, pair.to_code);
+            pair.installed = pair.installed || manager.is_installed();
+            pair.incomplete = manager.has_incomplete_package();
+        }
+        offline_translator::sort_store_pairs(marian_pairs);
+        for (const auto& pair : marian_pairs) {
+            PackageRow row;
+            row.marian = true;
+            row.from_code = pair.from_code;
+            row.to_code = pair.to_code;
+            row.title = from_utf8(
+                "MarianMT · " + offline_translator::store_pair_label(pair));
+            row.installed = pair.installed;
+            row.incomplete = pair.incomplete;
+            rows.push_back(std::move(row));
+        }
+        return rows;
     }
     if (!g_runtime ||
         selected_engine() != offline_translator::EngineKind::firefox) {
@@ -902,6 +1009,18 @@ void start_package_job(HWND packages_window, bool install) {
             return;
         }
     }
+    if (install && row.marian) {
+        const int answer = MessageBoxW(
+            packages_window,
+            (L"Скачать модель MarianMT (Helsinki-NLP OPUS-MT)?\n" +
+             row.title)
+                .c_str(),
+            L"Установка MarianMT",
+            MB_ICONINFORMATION | MB_YESNO);
+        if (answer != IDYES) {
+            return;
+        }
+    }
     if (!install && row.nllb) {
         const int answer = MessageBoxW(
             packages_window,
@@ -919,7 +1038,7 @@ void start_package_job(HWND packages_window, bool install) {
         const int answer = MessageBoxW(
             packages_window,
             question.c_str(),
-            L"Удаление Argos",
+            row.marian ? L"Удаление MarianMT" : L"Удаление Argos",
             MB_ICONQUESTION | MB_YESNO);
         if (answer != IDYES) {
             return;
@@ -980,6 +1099,16 @@ void start_package_job(HWND packages_window, bool install) {
                 } else {
                     manager.uninstall();
                 }
+            } else if (row.marian) {
+                offline_translator::MarianModelManager manager(
+                    std::filesystem::path(marian_model_root()),
+                    row.from_code,
+                    row.to_code);
+                if (install) {
+                    manager.download_and_install(progress);
+                } else {
+                    manager.uninstall();
+                }
             } else {
                 offline_translator::ArgosModelManager manager(
                     model_root_path(false),
@@ -997,6 +1126,8 @@ void start_package_job(HWND packages_window, bool install) {
         } catch (const std::exception& error) {
             done->failed = true;
             done->text = from_utf8(error.what());
+            offline_translator::app_log_error(
+                std::string("пакет не установлен: ") + error.what());
         }
         runtime->packages_busy = false;
         if (runtime->closing || !IsWindow(packages_window)) {
@@ -1014,15 +1145,103 @@ HINSTANCE window_instance(HWND window) {
     return reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(window, GWLP_HINSTANCE));
 }
 
-std::wstring find_app_icon_path() {
+bool is_dark_theme() {
+    if (!g_runtime) {
+        return false;
+    }
+    return offline_translator::normalize_ui_theme(g_runtime->settings.ui_theme) ==
+        offline_translator::kUiThemeDark;
+}
+
+UiTheme current_ui_theme() {
+    if (is_dark_theme()) {
+        return UiTheme{
+            RGB(0, 0, 0),
+            RGB(255, 255, 255),
+            RGB(255, 255, 255),
+            RGB(255, 255, 255),
+            RGB(42, 42, 42),
+            RGB(61, 61, 61),
+            RGB(255, 255, 255),
+        };
+    }
+    return UiTheme{
+        RGB(255, 255, 255),
+        RGB(0, 0, 0),
+        RGB(0, 0, 0),
+        RGB(0, 0, 0),
+        RGB(230, 230, 230),
+        RGB(208, 208, 208),
+        RGB(0, 0, 0),
+    };
+}
+
+HBRUSH theme_background_brush() {
+    static COLORREF last = RGB(255, 255, 255);
+    static HBRUSH brush = CreateSolidBrush(last);
+    const COLORREF now = current_ui_theme().background;
+    if (now != last) {
+        if (brush) {
+            DeleteObject(brush);
+        }
+        brush = CreateSolidBrush(now);
+        last = now;
+    }
+    return brush;
+}
+
+BOOL CALLBACK apply_theme_to_child(HWND child, LPARAM) {
+    SetWindowTheme(child, L"", L"");
+    return TRUE;
+}
+
+void apply_theme_to_window(HWND window) {
+    if (!window || !IsWindow(window)) {
+        return;
+    }
+    SetWindowTheme(window, L"", L"");
+    EnumChildWindows(window, apply_theme_to_child, 0);
+    InvalidateRect(window, nullptr, TRUE);
+    RedrawWindow(
+        window,
+        nullptr,
+        nullptr,
+        RDW_ERASE | RDW_INVALIDATE | RDW_ALLCHILDREN);
+}
+
+void apply_live_theme() {
+    if (!g_runtime) {
+        return;
+    }
+    apply_theme_to_window(g_runtime->main_window);
+    apply_theme_to_window(g_runtime->settings_window);
+    apply_theme_to_window(g_runtime->packages_window);
+}
+
+LRESULT theme_control_color(WPARAM w_param, LPARAM l_param) {
+    const HDC dc = reinterpret_cast<HDC>(w_param);
+    const UiTheme theme = current_ui_theme();
+    SetBkColor(dc, theme.background);
+    SetTextColor(dc, theme.text);
+    const HWND child = reinterpret_cast<HWND>(l_param);
+    wchar_t class_name[32]{};
+    GetClassNameW(child, class_name, 32);
+    if (lstrcmpiW(class_name, L"EDIT") == 0 ||
+        lstrcmpiW(class_name, L"COMBOBOX") == 0) {
+        SetBkColor(dc, theme.background);
+    }
+    return reinterpret_cast<LRESULT>(theme_background_brush());
+}
+
+std::wstring find_asset_file(const std::wstring& name) {
     const std::wstring exe_dir = executable_directory();
     std::vector<std::wstring> candidates{
-        exe_dir + L"\\assets\\app.ico",
-        exe_dir + L"\\app.ico",
+        exe_dir + L"\\assets\\" + name,
+        exe_dir + L"\\" + name,
     };
     std::wstring walk = exe_dir;
     for (int step = 0; step < 8; ++step) {
-        candidates.push_back(walk + L"\\assets\\app.ico");
+        candidates.push_back(walk + L"\\assets\\" + name);
         const auto separator = walk.find_last_of(L"\\/");
         if (separator == std::wstring::npos) {
             break;
@@ -1035,6 +1254,20 @@ std::wstring find_app_icon_path() {
         }
     }
     return {};
+}
+
+std::wstring find_app_icon_path() {
+    return find_asset_file(L"app.ico");
+}
+
+std::wstring find_theme_icon_path() {
+    const std::wstring primary =
+        is_dark_theme() ? L"icon-dark.png" : L"icon-light.png";
+    const std::wstring path = find_asset_file(primary);
+    if (!path.empty()) {
+        return path;
+    }
+    return find_asset_file(L"icon.png");
 }
 
 HICON create_generated_icon() {
@@ -1060,7 +1293,38 @@ HICON create_generated_icon() {
     return icon;
 }
 
+HICON create_hicon_from_png(const std::wstring& path, int size) {
+    std::unique_ptr<Gdiplus::Bitmap> source(
+        Gdiplus::Bitmap::FromFile(path.c_str()));
+    if (!source || source->GetLastStatus() != Gdiplus::Ok) {
+        return nullptr;
+    }
+    Gdiplus::Bitmap scaled(size, size, PixelFormat32bppARGB);
+    if (scaled.GetLastStatus() != Gdiplus::Ok) {
+        return nullptr;
+    }
+    Gdiplus::Graphics graphics(&scaled);
+    if (graphics.GetLastStatus() != Gdiplus::Ok) {
+        return nullptr;
+    }
+    graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
+    graphics.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
+    graphics.DrawImage(source.get(), 0, 0, size, size);
+    HICON icon = nullptr;
+    if (scaled.GetHICON(&icon) != Gdiplus::Ok) {
+        return nullptr;
+    }
+    return icon;
+}
+
 HICON load_tray_icon() {
+    const std::wstring png = find_theme_icon_path();
+    if (!png.empty()) {
+        if (HICON icon = create_hicon_from_png(png, 16)) {
+            return icon;
+        }
+    }
     const std::wstring path = find_app_icon_path();
     if (!path.empty()) {
         HICON icon = static_cast<HICON>(LoadImageW(
@@ -1077,27 +1341,21 @@ HICON load_tray_icon() {
     return create_generated_icon();
 }
 
+void refresh_tray_icon() {
+    HICON next = load_tray_icon();
+    if (g_tray_icon) {
+        DestroyIcon(g_tray_icon);
+        g_tray_icon = nullptr;
+    }
+    g_tray_icon = next;
+    if (g_tray_added) {
+        g_tray_data.hIcon = g_tray_icon;
+        Shell_NotifyIconW(NIM_MODIFY, &g_tray_data);
+    }
+}
+
 std::wstring find_selection_icon_path() {
-    const std::wstring exe_dir = executable_directory();
-    std::vector<std::wstring> candidates{
-        exe_dir + L"\\assets\\icon.png",
-        exe_dir + L"\\icon.png",
-    };
-    std::wstring walk = exe_dir;
-    for (int step = 0; step < 8; ++step) {
-        candidates.push_back(walk + L"\\assets\\icon.png");
-        const auto separator = walk.find_last_of(L"\\/");
-        if (separator == std::wstring::npos) {
-            break;
-        }
-        walk = walk.substr(0, separator);
-    }
-    for (const auto& path : candidates) {
-        if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) {
-            return path;
-        }
-    }
-    return {};
+    return find_theme_icon_path();
 }
 
 // Повторяет _fill_clickable_disk() из selection_button.py: находит радиус
@@ -1139,13 +1397,13 @@ void fill_clickable_disk(Gdiplus::BitmapData& data, int alpha_limit) {
     }
 }
 
-// Готовит 40×40 premultiplied-DIB из assets/icon.png для
+// Готовит 40×40 premultiplied-DIB из тематической PNG для
 // UpdateLayeredWindow. Возвращает true, если иконка загружена.
 bool compose_selection_icon_bitmap(HBITMAP* out_bitmap) {
     *out_bitmap = nullptr;
     const std::wstring path = find_selection_icon_path();
     if (path.empty()) {
-        sel_log("compose: icon.png не найден");
+        sel_log("compose: тематическая иконка не найдена");
         return false;
     }
     std::unique_ptr<Gdiplus::Bitmap> source(
@@ -1340,13 +1598,25 @@ bool register_translate_hotkey(HWND window, const std::string& spec) {
                parsed->vk) != FALSE;
 }
 
+const wchar_t* tray_menu_label(UINT id) {
+    switch (id) {
+        case kTrayOpen:
+            return L"Открыть";
+        case kTrayAutostart:
+            return L"Запускать вместе с Windows";
+        case kTrayExit:
+            return L"Выход";
+        default:
+            return L"";
+    }
+}
+
 void show_tray_menu(HWND window) {
     HMENU menu = CreatePopupMenu();
     if (!menu) {
         return;
     }
-    AppendMenuW(menu, MF_STRING, kTrayOpen, L"Открыть");
-    UINT autostart_flags = MF_STRING;
+    UINT autostart_flags = MF_OWNERDRAW;
     try {
         if (offline_translator::is_app_autostart_enabled()) {
             autostart_flags |= MF_CHECKED;
@@ -1355,11 +1625,25 @@ void show_tray_menu(HWND window) {
     }
     AppendMenuW(
         menu,
+        MF_OWNERDRAW,
+        kTrayOpen,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayOpen)));
+    AppendMenuW(
+        menu,
         autostart_flags,
         kTrayAutostart,
-        L"Запускать вместе с Windows");
-    AppendMenuW(menu, MF_STRING, kTrayExit, L"Выход");
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayAutostart)));
+    AppendMenuW(
+        menu,
+        MF_OWNERDRAW,
+        kTrayExit,
+        reinterpret_cast<LPCWSTR>(static_cast<UINT_PTR>(kTrayExit)));
     SetMenuDefaultItem(menu, kTrayOpen, FALSE);
+    MENUINFO menu_info{};
+    menu_info.cbSize = sizeof(menu_info);
+    menu_info.fMask = MIM_BACKGROUND;
+    menu_info.hbrBack = theme_background_brush();
+    SetMenuInfo(menu, &menu_info);
     POINT cursor{};
     GetCursorPos(&cursor);
     SetForegroundWindow(window);
@@ -1403,20 +1687,82 @@ bool is_over_our_popup(int x, int y) {
 }
 
 void sel_log(const std::string& line) {
-    wchar_t flag[8]{};
-    if (GetEnvironmentVariableW(
-            L"OT_SEL_LOG",
-            flag,
-            static_cast<DWORD>(std::size(flag))) == 0) {
+    offline_translator::app_log_info(line);
+}
+
+std::string runtime_flags() {
+    if (!g_runtime) {
+        return "runtime=0";
+    }
+    return "busy=" + std::to_string(g_runtime->busy.load()) +
+        " sel_busy=" + std::to_string(g_runtime->selection_busy.load()) +
+        " engine=" + g_runtime->settings.engine +
+        " theme=" + g_runtime->settings.ui_theme;
+}
+
+void restart_selection_timer(HWND window) {
+    KillTimer(window, kSelectionPollTimer);
+    if (SetTimer(window, kSelectionPollTimer, 40, nullptr) == 0) {
+        offline_translator::app_log_error("SetTimer(poll) не удался");
+    }
+}
+
+void recover_input_hooks(HWND window, const char* reason) {
+    offline_translator::app_log_warn(
+        std::string("восстановление ввода: ") + reason + " " + runtime_flags());
+    restart_selection_timer(window);
+    if (!g_runtime) {
         return;
     }
-    char temp_dir[MAX_PATH]{};
-    GetTempPathA(MAX_PATH, temp_dir);
-    std::ofstream log(std::string(temp_dir) + "ot_sel.log",
-                      std::ios::binary | std::ios::app);
-    if (log) {
-        log << line << "\n";
+    if (!register_translate_hotkey(window, g_runtime->settings.translate_hotkey)) {
+        offline_translator::app_log_error(
+            "не удалось заново зарегистрировать горячую клавишу " +
+            g_runtime->settings.translate_hotkey);
     }
+}
+
+void note_poll_tick(HWND window) {
+    const auto now = GetTickCount64();
+    const auto previous = g_last_poll_tick.exchange(now);
+    if (previous != 0 && now > previous + 120000) {
+        recover_input_hooks(
+            window,
+            ("пауза опроса " + std::to_string(now - previous) + " мс").c_str());
+    }
+    const auto last_beat = g_last_heartbeat_tick.load();
+    if (last_beat == 0 || now > last_beat + 5 * 60 * 1000) {
+        g_last_heartbeat_tick.store(now);
+        const auto uptime_min =
+            g_app_start_tick == 0 ? 0 : (now - g_app_start_tick) / 60000;
+        offline_translator::app_log_info(
+            "пульс uptime_min=" + std::to_string(uptime_min) + " " +
+            runtime_flags());
+    }
+}
+
+void start_watchdog(HWND window) {
+    std::thread([window]() {
+        while (true) {
+            for (int step = 0; step < 60; ++step) {
+                if (!g_runtime || g_runtime->closing) {
+                    return;
+                }
+                Sleep(1000);
+            }
+            if (!g_runtime || g_runtime->closing || !IsWindow(window)) {
+                return;
+            }
+            const auto now = GetTickCount64();
+            const auto last_poll = g_last_poll_tick.load();
+            const auto gap = last_poll == 0 ? now : now - last_poll;
+            offline_translator::app_log_info(
+                "сторож poll_gap_ms=" + std::to_string(gap) + " " +
+                runtime_flags());
+            if (gap > 30000) {
+                PostMessageW(window, kRecoverInputMessage, 0, 0);
+            }
+        }
+    }).detach();
 }
 
 // Ожидание в capture_selected_text_win32 с прокачкой сообщений:
@@ -1711,7 +2057,7 @@ void show_result_popup(
     clamp_point_to_work_area(width, client_height, x, y);
 
     g_result_popup = CreateWindowExW(
-        WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
+        WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         L"OfflineTranslatorResultPopup",
         L"Перевод",
         WS_POPUP | WS_VISIBLE,
@@ -1726,8 +2072,6 @@ void show_result_popup(
     if (!g_result_popup) {
         return;
     }
-    // Полупрозрачность 0.97, как в Python (_style_overlay_window).
-    SetLayeredWindowAttributes(g_result_popup, 0, 247, LWA_ALPHA);
 
     const std::wstring header = from_utf8(
         offline_translator::language_display_name(source_code) + " → " +
@@ -1826,6 +2170,8 @@ void show_result_popup(
 
 void start_selection_translation(HWND main_window) {
     if (!g_runtime || g_runtime->selection_busy.exchange(true)) {
+        offline_translator::app_log_warn(
+            "перевод выделения пропущен: уже выполняется " + runtime_flags());
         return;
     }
     std::wstring selected = g_selection.selected_text;
@@ -1835,10 +2181,14 @@ void start_selection_translation(HWND main_window) {
     }
     if (selected.size() < 2) {
         g_runtime->selection_busy = false;
+        offline_translator::app_log_info("перевод выделения отменён: короткий текст");
         return;
     }
     const std::string text = to_utf8(selected);
     const auto direction = offline_translator::choose_selection_direction(text);
+    offline_translator::app_log_info(
+        "перевод выделения старт chars=" + std::to_string(text.size()) + " " +
+        direction.first + "→" + direction.second + " " + runtime_flags());
     const auto engine_kind = selected_engine();
     const auto root = model_root_for_kind(engine_kind);
     const std::string engine_variant =
@@ -1848,6 +2198,7 @@ void start_selection_translation(HWND main_window) {
     auto runtime = g_runtime;
     std::thread([main_window, text, direction, engine_kind, engine_variant, root, runtime]() {
         auto result = std::make_unique<StatusPayload>();
+        const auto started = GetTickCount64();
         try {
             std::lock_guard lock(runtime->mutex);
             if (runtime->closing) {
@@ -1860,9 +2211,17 @@ void start_selection_translation(HWND main_window) {
                 application.translate(text, direction.first, direction.second)
                     .text);
             runtime->session.mark_loaded();
+            offline_translator::app_log_info(
+                "перевод выделения готов ms=" +
+                std::to_string(GetTickCount64() - started) +
+                " out_chars=" + std::to_string(result->text.size()));
         } catch (const std::exception& error) {
             result->failed = true;
             result->text = from_utf8(std::string("Ошибка: ") + error.what());
+            offline_translator::app_log_error(
+                std::string("перевод выделения ошибка ms=") +
+                std::to_string(GetTickCount64() - started) + " " +
+                error.what());
         }
         runtime->selection_busy = false;
         if (runtime->closing || !IsWindow(main_window)) {
@@ -1910,9 +2269,15 @@ void finish_double_ctrl_c(HWND main_window) {
         if (selected.size() >= 2) {
             g_selection.selected_text = selected;
             hide_selection_button();
+            offline_translator::app_log_info(
+                "Ctrl+C+C буфер chars=" + std::to_string(selected.size()));
             start_selection_translation(main_window);
+        } else {
+            offline_translator::app_log_warn("Ctrl+C+C: буфер пуст или слишком короткий");
         }
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("Ctrl+C+C ошибка чтения буфера: ") + error.what());
     }
 }
 
@@ -2071,6 +2436,7 @@ void poll_selection(HWND main_window) {
 }
 
 void handle_translate_hotkey(HWND window) {
+    offline_translator::app_log_info("горячая клавиша перевода " + runtime_flags());
     for (int step = 0; step < 25; ++step) {
         if (!key_down(VK_CONTROL) && !key_down(VK_SHIFT) &&
             !key_down(VK_MENU) && !key_down(VK_LWIN) && !key_down(VK_RWIN)) {
@@ -2092,6 +2458,7 @@ void handle_translate_hotkey(HWND window) {
         selected = previous;
     }
     if (selected.size() < 2) {
+        offline_translator::app_log_warn("горячая клавиша: нет выделенного текста");
         set_status(L"Нет выделенного текста");
         return;
     }
@@ -2178,14 +2545,15 @@ LRESULT CALLBACK result_popup_proc(
     if (message == WM_DRAWITEM) {
         auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
         if (draw && draw->CtlType == ODT_BUTTON) {
+            const UiTheme theme = current_ui_theme();
             const bool hovered =
                 GetPropW(draw->hwndItem, kHoverPropertyName) != nullptr;
             HBRUSH brush = CreateSolidBrush(
-                hovered ? kButtonHover : kButtonFace);
+                hovered ? theme.button_hover : theme.button_face);
             FillRect(draw->hDC, &draw->rcItem, brush);
             DeleteObject(brush);
             SetBkMode(draw->hDC, TRANSPARENT);
-            SetTextColor(draw->hDC, RGB(0, 0, 0));
+            SetTextColor(draw->hDC, theme.button_text);
             SelectObject(draw->hDC, popup_font(PopupFont::button));
             wchar_t label[64]{};
             GetWindowTextW(draw->hwndItem, label, 64);
@@ -2202,29 +2570,27 @@ LRESULT CALLBACK result_popup_proc(
         RECT client{};
         GetClientRect(window, &client);
         HDC dc = reinterpret_cast<HDC>(w_param);
-        // Рамка 1px + панель #f2f2f2, как трюк Python с чёрной подложкой.
-        HBRUSH border_brush = CreateSolidBrush(kPopupBorder);
+        const UiTheme theme = current_ui_theme();
+        HBRUSH border_brush = CreateSolidBrush(theme.border);
         FillRect(dc, &client, border_brush);
         DeleteObject(border_brush);
         RECT inner = client;
         InflateRect(&inner, -1, -1);
-        HBRUSH panel_brush = CreateSolidBrush(kPopupBackground);
+        HBRUSH panel_brush = CreateSolidBrush(theme.background);
         FillRect(dc, &inner, panel_brush);
         DeleteObject(panel_brush);
         return 1;
     }
-    if (message == WM_CTLCOLORSTATIC) {
+    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT) {
         const HDC dc = reinterpret_cast<HDC>(w_param);
-        SetBkColor(dc, kPopupBackground);
-        // Заголовок приглушённый #333333, текст перевода чёрный.
+        const UiTheme theme = current_ui_theme();
+        SetBkColor(dc, theme.background);
         if (reinterpret_cast<HWND>(l_param) == g_popup_result_edit) {
-            SetTextColor(dc, RGB(0, 0, 0));
+            SetTextColor(dc, theme.text);
         } else {
-            SetTextColor(dc, kPopupHeaderText);
+            SetTextColor(dc, theme.header);
         }
-        static HBRUSH background =
-            CreateSolidBrush(kPopupBackground);
-        return reinterpret_cast<LRESULT>(background);
+        return reinterpret_cast<LRESULT>(theme_background_brush());
     }
     if (message == WM_KEYDOWN && w_param == VK_ESCAPE) {
         hide_result_popup();
@@ -2284,6 +2650,11 @@ void apply_settings_dialog(HWND settings_window) {
     }
     settings.translate_hotkey =
         offline_translator::format_hotkey(*offline_translator::parse_hotkey(hotkey));
+    settings.ui_theme =
+        g_settings_theme_dark &&
+        SendMessageW(g_settings_theme_dark, BM_GETCHECK, 0, 0) == BST_CHECKED
+            ? std::string{offline_translator::kUiThemeDark}
+            : std::string{offline_translator::kUiThemeLight};
     if (g_runtime->main_window && g_engine_combo) {
         settings.engine =
             offline_translator::settings_engine_name(selected_engine());
@@ -2310,6 +2681,12 @@ void apply_settings_dialog(HWND settings_window) {
             }
         }
         g_runtime->settings = settings;
+        refresh_tray_icon();
+        apply_live_theme();
+        offline_translator::app_log_info(
+            "настройки сохранены engine=" + settings.engine +
+            " theme=" + settings.ui_theme +
+            " modifier=" + settings.popup_modifier);
         close_settings_window();
         set_status(L"Настройки сохранены");
     } catch (const std::exception& error) {
@@ -2336,6 +2713,8 @@ void close_settings_window() {
     g_settings_selectable = nullptr;
     g_settings_autostart = nullptr;
     g_settings_hotkey_edit = nullptr;
+    g_settings_theme_light = nullptr;
+    g_settings_theme_dark = nullptr;
     DestroyWindow(settings);
     if (main) {
         EnableWindow(main, TRUE);
@@ -2466,10 +2845,59 @@ LRESULT CALLBACK settings_proc(
             0);
         CreateWindowW(
             L"STATIC",
+            L"Тема:",
+            WS_VISIBLE | WS_CHILD,
+            16,
+            220,
+            80,
+            20,
+            window,
+            nullptr,
+            nullptr,
+            nullptr);
+        g_settings_theme_light = CreateWindowW(
+            L"BUTTON",
+            L"Светлая",
+            WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON | WS_GROUP,
+            16,
+            244,
+            120,
+            22,
+            window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsThemeLight)),
+            nullptr,
+            nullptr);
+        g_settings_theme_dark = CreateWindowW(
+            L"BUTTON",
+            L"Тёмная",
+            WS_VISIBLE | WS_CHILD | BS_AUTORADIOBUTTON,
+            148,
+            244,
+            120,
+            22,
+            window,
+            reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsThemeDark)),
+            nullptr,
+            nullptr);
+        const bool dark_theme =
+            offline_translator::normalize_ui_theme(settings.ui_theme) ==
+            offline_translator::kUiThemeDark;
+        SendMessageW(
+            g_settings_theme_light,
+            BM_SETCHECK,
+            dark_theme ? BST_UNCHECKED : BST_CHECKED,
+            0);
+        SendMessageW(
+            g_settings_theme_dark,
+            BM_SETCHECK,
+            dark_theme ? BST_CHECKED : BST_UNCHECKED,
+            0);
+        CreateWindowW(
+            L"STATIC",
             L"Горячая клавиша перевода выделения:",
             WS_VISIBLE | WS_CHILD,
             16,
-            228,
+            280,
             300,
             20,
             window,
@@ -2481,7 +2909,7 @@ LRESULT CALLBACK settings_proc(
             from_utf8(settings.translate_hotkey).c_str(),
             WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL,
             16,
-            252,
+            304,
             240,
             24,
             window,
@@ -2493,7 +2921,7 @@ LRESULT CALLBACK settings_proc(
             L"Запускать вместе с Windows",
             WS_VISIBLE | WS_CHILD | BS_AUTOCHECKBOX,
             16,
-            292,
+            344,
             400,
             24,
             window,
@@ -2510,12 +2938,42 @@ LRESULT CALLBACK settings_proc(
             BM_SETCHECK,
             autostart ? BST_CHECKED : BST_UNCHECKED,
             0);
+        const std::wstring about_version =
+            L"Версия: " +
+            from_utf8(std::string(offline_translator::kAppVersionDisplay));
+        const std::wstring about_author =
+            L"Автор: " +
+            from_utf8(std::string(offline_translator::kAppPublisher));
+        CreateWindowW(
+            L"STATIC",
+            about_version.c_str(),
+            WS_VISIBLE | WS_CHILD,
+            16,
+            384,
+            470,
+            20,
+            window,
+            nullptr,
+            nullptr,
+            nullptr);
+        CreateWindowW(
+            L"STATIC",
+            about_author.c_str(),
+            WS_VISIBLE | WS_CHILD,
+            16,
+            408,
+            470,
+            20,
+            window,
+            nullptr,
+            nullptr,
+            nullptr);
         CreateWindowW(
             L"BUTTON",
             L"Сохранить",
             WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             16,
-            336,
+            448,
             120,
             30,
             window,
@@ -2527,14 +2985,31 @@ LRESULT CALLBACK settings_proc(
             L"Отмена",
             WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
             148,
-            336,
+            448,
             120,
             30,
             window,
             reinterpret_cast<HMENU>(static_cast<INT_PTR>(kSettingsCancel)),
             nullptr,
             nullptr);
+        apply_theme_to_window(window);
         return 0;
+    }
+    if (message == WM_ERASEBKGND) {
+        RECT client{};
+        GetClientRect(window, &client);
+        FillRect(
+            reinterpret_cast<HDC>(w_param),
+            &client,
+            theme_background_brush());
+        return 1;
+    }
+    if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT) {
+        const HDC dc = reinterpret_cast<HDC>(w_param);
+        const UiTheme theme = current_ui_theme();
+        SetBkColor(dc, theme.background);
+        SetTextColor(dc, theme.text);
+        return reinterpret_cast<LRESULT>(theme_background_brush());
     }
     if (message == WM_COMMAND) {
         const int id = LOWORD(w_param);
@@ -2583,7 +3058,7 @@ void open_settings_window(HWND parent, HINSTANCE instance) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         520,
-        450,
+        600,
         parent,
         nullptr,
         instance,
@@ -2618,8 +3093,8 @@ void create_main_controls(HWND window) {
         WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
         90,
         12,
-        140,
-        160,
+        155,
+        200,
         window,
         reinterpret_cast<HMENU>(static_cast<INT_PTR>(kEngineCombo)),
         nullptr,
@@ -2639,11 +3114,16 @@ void create_main_controls(HWND window) {
         CB_ADDSTRING,
         0,
         reinterpret_cast<LPARAM>(L"Firefox"));
+    SendMessageW(
+        g_engine_combo,
+        CB_ADDSTRING,
+        0,
+        reinterpret_cast<LPARAM>(L"MarianMT"));
     SendMessageW(g_engine_combo, CB_SETCURSEL, 0, 0);
     g_packages_button = CreateWindowW(
         L"BUTTON",
         L"Пакеты",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
         390,
         12,
         110,
@@ -2655,7 +3135,7 @@ void create_main_controls(HWND window) {
     g_settings_button = CreateWindowW(
         L"BUTTON",
         L"Настройки",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
         272,
         12,
         110,
@@ -2729,7 +3209,7 @@ void create_main_controls(HWND window) {
     g_translate_button = CreateWindowW(
         L"BUTTON",
         L"Перевести",
-        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON | WS_TABSTOP,
+        WS_VISIBLE | WS_CHILD | BS_OWNERDRAW | WS_TABSTOP,
         16,
         186,
         120,
@@ -2769,6 +3249,16 @@ void create_main_controls(HWND window) {
     }
     apply_settings_to_ui(settings);
     layout_main(window);
+    if (g_packages_button) {
+        SetWindowSubclass(g_packages_button, flat_button_subclass, 2, 0);
+    }
+    if (g_settings_button) {
+        SetWindowSubclass(g_settings_button, flat_button_subclass, 2, 0);
+    }
+    if (g_translate_button) {
+        SetWindowSubclass(g_translate_button, flat_button_subclass, 2, 0);
+    }
+    apply_theme_to_window(window);
 }
 
 void close_packages_window() {
@@ -2798,7 +3288,7 @@ LRESULT CALLBACK packages_proc(
         if (message == WM_CREATE) {
             CreateWindowW(
                 L"STATIC",
-                L"Установленные и доступные пакеты Argos/NLLB:",
+                L"Установленные и доступные языковые пакеты:",
                 WS_VISIBLE | WS_CHILD,
                 16,
                 12,
@@ -2939,7 +3429,18 @@ LRESULT CALLBACK packages_proc(
                 nullptr,
                 nullptr);
             refresh_package_list();
+            apply_theme_to_window(window);
             std::thread([window]() {
+                if (selected_engine() ==
+                    offline_translator::EngineKind::marian) {
+                    offline_translator::MarianModelManager::update_remote_index();
+                    post_payload(
+                        window,
+                        kPackageIndexMessage,
+                        L"Каталог MarianMT обновлён",
+                        false);
+                    return;
+                }
                 offline_translator::ArgosModelManager::update_remote_index();
                 post_payload(
                     window,
@@ -2948,6 +3449,19 @@ LRESULT CALLBACK packages_proc(
                     false);
             }).detach();
             return 0;
+        }
+        if (message == WM_ERASEBKGND) {
+            RECT client{};
+            GetClientRect(window, &client);
+            FillRect(
+                reinterpret_cast<HDC>(w_param),
+                &client,
+                theme_background_brush());
+            return 1;
+        }
+        if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT ||
+            message == WM_CTLCOLORLISTBOX || message == WM_CTLCOLORBTN) {
+            return theme_control_color(w_param, l_param);
         }
         if (message == kPackageIndexMessage) {
             std::unique_ptr<StatusPayload> payload(
@@ -3112,6 +3626,79 @@ LRESULT CALLBACK window_proc(
             persist_settings(window);
             return 0;
         }
+        if (message == WM_MEASUREITEM) {
+            auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(l_param);
+            if (measure && measure->CtlType == ODT_MENU) {
+                measure->itemWidth = 240;
+                measure->itemHeight = 26;
+                return TRUE;
+            }
+        }
+        if (message == WM_ERASEBKGND) {
+            RECT client{};
+            GetClientRect(window, &client);
+            FillRect(
+                reinterpret_cast<HDC>(w_param),
+                &client,
+                theme_background_brush());
+            return 1;
+        }
+        if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLOREDIT ||
+            message == WM_CTLCOLORLISTBOX || message == WM_CTLCOLORBTN) {
+            return theme_control_color(w_param, l_param);
+        }
+        if (message == WM_DRAWITEM) {
+            auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(l_param);
+            if (draw && draw->CtlType == ODT_BUTTON) {
+                const UiTheme theme = current_ui_theme();
+                const bool hovered =
+                    GetPropW(draw->hwndItem, kHoverPropertyName) != nullptr;
+                HBRUSH brush = CreateSolidBrush(
+                    hovered ? theme.button_hover : theme.button_face);
+                FillRect(draw->hDC, &draw->rcItem, brush);
+                DeleteObject(brush);
+                SetBkMode(draw->hDC, TRANSPARENT);
+                SetTextColor(draw->hDC, theme.button_text);
+                wchar_t label[64]{};
+                GetWindowTextW(draw->hwndItem, label, 64);
+                DrawTextW(
+                    draw->hDC,
+                    label,
+                    -1,
+                    &draw->rcItem,
+                    DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                return TRUE;
+            }
+            if (draw && draw->CtlType == ODT_MENU) {
+                const UiTheme theme = current_ui_theme();
+                const bool selected = (draw->itemState & ODS_SELECTED) != 0;
+                HBRUSH brush = CreateSolidBrush(
+                    selected ? theme.button_hover : theme.background);
+                FillRect(draw->hDC, &draw->rcItem, brush);
+                DeleteObject(brush);
+                SetBkMode(draw->hDC, TRANSPARENT);
+                SetTextColor(draw->hDC, theme.text);
+                RECT text_bounds = draw->rcItem;
+                text_bounds.left += 24;
+                if (draw->itemState & ODS_CHECKED) {
+                    RECT mark = draw->rcItem;
+                    mark.right = mark.left + 22;
+                    DrawTextW(
+                        draw->hDC,
+                        L"✓",
+                        -1,
+                        &mark,
+                        DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+                DrawTextW(
+                    draw->hDC,
+                    tray_menu_label(static_cast<UINT>(draw->itemID)),
+                    -1,
+                    &text_bounds,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+                return TRUE;
+            }
+        }
         if (message == WM_COMMAND &&
             LOWORD(w_param) == kTranslateButton &&
             HIWORD(w_param) == BN_CLICKED) {
@@ -3158,10 +3745,24 @@ LRESULT CALLBACK window_proc(
             HIWORD(w_param) == CBN_SELCHANGE) {
             persist_settings(window);
             if (LOWORD(w_param) == kEngineCombo) {
-                set_status(
-                    selected_engine() == offline_translator::EngineKind::nllb
-                        ? L"Выбран NLLB-200. Модель загрузится при переводе."
-                        : L"Выбран Argos. Пакет загрузится при переводе.");
+                switch (selected_engine()) {
+                    case offline_translator::EngineKind::nllb:
+                        set_status(
+                            L"Выбран NLLB-200. Модель загрузится при переводе.");
+                        break;
+                    case offline_translator::EngineKind::firefox:
+                        set_status(
+                            L"Выбран Firefox. Пакет загрузится при переводе.");
+                        break;
+                    case offline_translator::EngineKind::marian:
+                        set_status(
+                            L"Выбран MarianMT. Пакет загрузится при переводе.");
+                        break;
+                    case offline_translator::EngineKind::argos:
+                        set_status(
+                            L"Выбран Argos. Пакет загрузится при переводе.");
+                        break;
+                }
             }
             return 0;
         }
@@ -3207,7 +3808,23 @@ LRESULT CALLBACK window_proc(
             }
             return 0;
         }
+        if (message == kRecoverInputMessage) {
+            recover_input_hooks(window, "сторож: опрос замер");
+            return 0;
+        }
+        if (message == WM_POWERBROADCAST) {
+            if (w_param == PBT_APMSUSPEND) {
+                offline_translator::app_log_warn("система засыпает " + runtime_flags());
+            } else if (
+                w_param == PBT_APMRESUMESUSPEND ||
+                w_param == PBT_APMRESUMEAUTOMATIC) {
+                offline_translator::app_log_warn("система проснулась " + runtime_flags());
+                recover_input_hooks(window, "пробуждение");
+            }
+            return TRUE;
+        }
         if (message == WM_TIMER && w_param == kSelectionPollTimer) {
+            note_poll_tick(window);
             poll_selection(window);
             return 0;
         }
@@ -3232,6 +3849,7 @@ LRESULT CALLBACK window_proc(
             return 0;
         }
         if (message == WM_DESTROY) {
+            offline_translator::app_log_info("выход " + runtime_flags());
             persist_settings(window);
             KillTimer(window, kSelectionPollTimer);
             KillTimer(window, kSelectionButtonHideTimer);
@@ -3257,6 +3875,8 @@ LRESULT CALLBACK window_proc(
             return 0;
         }
     } catch (const std::exception& error) {
+        offline_translator::app_log_error(
+            std::string("исключение окна: ") + error.what());
         MessageBoxW(
             window,
             from_utf8(error.what()).c_str(),
@@ -3419,6 +4039,12 @@ int WINAPI wWinMain(
          command_has_flag(GetCommandLineW(), L"--minimized"));
     g_runtime = std::make_shared<GuiRuntime>();
     offline_translator::set_capture_wait_hook(&pump_wait);
+    if (!g_smoke_mode) {
+        offline_translator::init_app_log();
+        offline_translator::app_log_info(
+            "инициализация журнала " +
+            to_utf8(offline_translator::app_log_path().wstring()));
+    }
 
     const wchar_t class_name[] = L"OfflineTranslatorWindow";
     WNDCLASSW window_class{};
@@ -3510,6 +4136,9 @@ int WINAPI wWinMain(
     g_runtime->settings = settings;
     if (!g_smoke_mode &&
         !register_translate_hotkey(window, settings.translate_hotkey)) {
+        offline_translator::app_log_error(
+            "не удалось зарегистрировать горячую клавишу " +
+            settings.translate_hotkey);
         const std::wstring warning =
             L"Не удалось зарегистрировать горячую клавишу " +
             from_utf8(settings.translate_hotkey) + L".";
@@ -3539,6 +4168,16 @@ int WINAPI wWinMain(
         return run_smoke_loop(window);
     }
     add_tray_icon(window);
+    g_app_start_tick = GetTickCount64();
+    g_last_poll_tick = g_app_start_tick;
+    offline_translator::app_log_info(
+        "запуск pid=" + std::to_string(GetCurrentProcessId()) +
+        " engine=" + settings.engine +
+        " theme=" + settings.ui_theme +
+        " hotkey=" + settings.translate_hotkey +
+        " modifier=" + settings.popup_modifier +
+        " log=" + to_utf8(offline_translator::app_log_path().wstring()));
+    start_watchdog(window);
     if (g_start_minimized) {
         hide_to_tray(window);
     } else {

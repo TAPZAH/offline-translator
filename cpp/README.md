@@ -147,7 +147,7 @@ cmake -S cpp -B cpp/build-ctranslate2 -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake `
   -DENABLE_CTRANSLATE2=ON `
   -DCTranslate2_ROOT=C:/deps/CTranslate2 `
-  -DCTranslate2_BUILD_DIR=C:/deps/CTranslate2/build-openblas/ctranslate2
+  -DCTranslate2_BUILD_DIR=C:/deps/CTranslate2/build-openblas-dnnl/ctranslate2
 cmake --build cpp/build-ctranslate2 --config Release
 ctest --test-dir cpp/build-ctranslate2 -C Release --output-on-failure
 ```
@@ -244,7 +244,7 @@ cmake -DPACKAGE_DIR=cpp/portable-win32-lite -P cpp/cmake/CheckPortablePackage.cm
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" .\cpp\OfflineTranslatorCpp.iss
 ```
 
-Выход: `cpp/installer-output/offline-translator-cpp-0.1.0-setup.exe`.
+Выход: `cpp/installer-output/offline-translator-cpp-0.99-beta-setup.exe`.
 Python-упаковка (`build_portable.py`, `OfflineTranslator.iss`) не меняется.
 Деинсталлятор C++ удаляет `{app}` и `{app}\data`, но **не**
 `%USERPROFILE%\.local\share\offline-translator`. Автозагрузка Run

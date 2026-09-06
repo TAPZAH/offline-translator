@@ -1,5 +1,6 @@
 #include "file_transfer.hpp"
 #include "fs_utils.hpp"
+#include "offline_translator/app_log.hpp"
 
 #include <algorithm>
 #include <cwchar>
@@ -27,7 +28,7 @@ namespace {
 constexpr std::size_t kChunkSize = 64 * 1024;
 constexpr std::uint64_t kProgressStep = 1024 * 1024;
 constexpr wchar_t kUserAgent[] =
-    L"offline-translator/0.98-beta (cpp-model-management)";
+    L"offline-translator/0.99-beta (cpp-model-management)";
 
 void report_progress(
     const ProgressCallback& progress,
@@ -192,6 +193,16 @@ void download_http_resumable(
         throw std::runtime_error(
             "WinHttpOpen не удался, код " + last_winhttp_error());
     }
+    DWORD protocols = WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_2;
+#ifdef WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3
+    protocols |= WINHTTP_FLAG_SECURE_PROTOCOL_TLS1_3;
+#endif
+    WinHttpSetOption(
+        session.get(),
+        WINHTTP_OPTION_SECURE_PROTOCOLS,
+        &protocols,
+        sizeof(protocols));
+    WinHttpSetTimeouts(session.get(), 15000, 15000, 30000, 120000);
 
     WinHttpHandle connection(WinHttpConnect(
         session.get(),
@@ -222,9 +233,13 @@ void download_http_resumable(
             "WinHttpOpenRequest не удался, код " + last_winhttp_error());
     }
 
-    std::wstring headers;
+    std::wstring headers = L"Accept: */*\r\n";
+    const std::wstring hostname(parts.lpszHostName);
+    if (hostname.find(L"github.com") != std::wstring::npos) {
+        headers += L"Accept: application/vnd.github+json\r\n";
+    }
     if (existing > 0) {
-        headers = L"Range: bytes=" + std::to_wstring(existing) + L"-";
+        headers += L"Range: bytes=" + std::to_wstring(existing) + L"-\r\n";
     }
     if (!WinHttpSendRequest(
             request.get(),
@@ -258,6 +273,8 @@ void download_http_resumable(
         return;
     }
     if (status != 200 && status != 206) {
+        app_log_warn(
+            "HTTP " + std::to_string(status) + " " + url);
         throw std::runtime_error(
             "HTTP " + std::to_string(status) + " для " + url);
     }
@@ -398,6 +415,7 @@ void download_resumable(
     std::string last_error;
     for (const auto& url : urls) {
         try {
+            app_log_info("скачивание " + url);
             auto existing = fs_utils::file_size_or_zero(part_path);
             download_one_url(url, part_path, existing, progress, message);
             if (std::filesystem::exists(destination)) {

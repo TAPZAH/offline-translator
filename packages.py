@@ -54,7 +54,7 @@ def uninstall_package(
 def redownload_package(language_package, progress_callback=None) -> None:
     """Удаляет пакет и скачивает его заново."""
     architecture = getattr(language_package, "architecture", None)
-    if architecture in {"argos", "nllb"}:
+    if architecture in {"argos", "nllb", "marian"}:
         architecture = None
     uninstall_package(
         language_package.from_code,
@@ -99,7 +99,12 @@ def invalidate_caches() -> None:
     global _cached_backend, _cached_engine_name
     _cached_backend = None
     _cached_engine_name = None
-    for module_name in ("language_packages", "argos_packages", "nllb_packages"):
+    for module_name in (
+        "language_packages",
+        "argos_packages",
+        "nllb_packages",
+        "marian_packages",
+    ):
         try:
             module = __import__(module_name)
             invalidate = getattr(module, "invalidate_cache", None)
@@ -112,7 +117,12 @@ def invalidate_caches() -> None:
 def _backend():
     """Модуль пакетов выбранного движка."""
     global _cached_backend, _cached_engine_name
-    from app_settings import ENGINE_ARGOS, ENGINE_NLLB, get_engine_name
+    from app_settings import (
+        ENGINE_ARGOS,
+        ENGINE_MARIAN,
+        ENGINE_NLLB,
+        get_engine_name,
+    )
 
     engine = get_engine_name()
     if _cached_backend is not None and _cached_engine_name == engine:
@@ -121,6 +131,8 @@ def _backend():
         import argos_packages as backend
     elif engine == ENGINE_NLLB:
         import nllb_packages as backend
+    elif engine == ENGINE_MARIAN:
+        import marian_packages as backend
     else:
         import language_packages as backend
     _cached_backend = backend

@@ -21,6 +21,8 @@ set(_required_files
     msvcp140_atomic_wait.dll
     vcomp140.dll
     assets/app.ico
+    assets/icon-light.png
+    assets/icon-dark.png
     licenses/THIRD_PARTY.md
     README.txt
 )

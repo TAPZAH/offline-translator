@@ -18,7 +18,7 @@ except ImportError:
 CHUNK_SIZE = 64 * 1024
 REQUEST_TIMEOUT = (15, 120)
 REQUEST_HEADERS = {
-    "User-Agent": "offline-translator/1.0 (firefox-translations-models)"
+    "User-Agent": "offline-translator/0.99-beta (firefox-translations-models)"
 }
 FIREFOX_CDN = "https://firefox-settings-attachments.cdn.mozilla.net/"
 GITHUB_CONTENTS = (

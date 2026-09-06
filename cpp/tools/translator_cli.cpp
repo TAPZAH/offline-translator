@@ -13,7 +13,10 @@ offline_translator::EngineKind parse_engine(const std::string& name) {
     if (name == "nllb") {
         return offline_translator::EngineKind::nllb;
     }
-    throw std::invalid_argument("Движок должен быть argos или nllb");
+    if (name == "marian") {
+        return offline_translator::EngineKind::marian;
+    }
+    throw std::invalid_argument("Движок должен быть argos, nllb или marian");
 }
 
 }  // анонимное пространство имён
@@ -21,7 +24,7 @@ offline_translator::EngineKind parse_engine(const std::string& name) {
 int main(int argc, char** argv) {
     if (argc != 6) {
         std::cerr
-            << "Использование: translator_cli <argos|nllb> <корень-моделей> "
+            << "Использование: translator_cli <argos|nllb|marian> <корень-моделей> "
                "<с языка> <на язык> <текст>\n";
         return 2;
     }

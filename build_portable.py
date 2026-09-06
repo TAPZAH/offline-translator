@@ -41,7 +41,15 @@ SOURCE_EXCLUDE_DIRS = {
     "installer-dist",
     ".cursor",
     ".pytest_cache",
+    "installer-output",
+    "target",
+    "vcpkg_installed",
 }
+
+SOURCE_EXCLUDE_PREFIXES = (
+    "build-",
+    "portable-win32",
+)
 
 
 def create_app_icon() -> None:
@@ -195,6 +203,12 @@ def pack_sources(archive_path: Path) -> None:
                 continue
             relative = file_path.relative_to(ROOT)
             if any(part in SOURCE_EXCLUDE_DIRS for part in relative.parts):
+                continue
+            if any(
+                part.startswith(prefix)
+                for part in relative.parts
+                for prefix in SOURCE_EXCLUDE_PREFIXES
+            ):
                 continue
             if relative.suffix.lower() in {".zip", ".pyc"}:
                 continue

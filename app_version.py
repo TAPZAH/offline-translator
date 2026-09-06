@@ -4,7 +4,7 @@ APP_NAME = "Оффлайн Переводчик"
 APP_VERSION = "0.99-beta"
 APP_VERSION_DISPLAY = "beta 0.99"
 APP_VERSION_INFO = "0.99.0.0"
-APP_PUBLISHER = "Gelezyaka"
+APP_PUBLISHER = "TAP3AH"
 
 
 def window_title() -> str:

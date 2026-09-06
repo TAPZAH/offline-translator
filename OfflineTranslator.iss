@@ -2,7 +2,7 @@
 
 #define AppName "Оффлайн Переводчик"
 #define AppVersion "0.99-beta"
-#define AppPublisher "Gelezyaka"
+#define AppPublisher "TAP3AH"
 #define AppExeName "OfflineTranslator.exe"
 #define PortableDir "dist\offline-translator-portable-lite"
 

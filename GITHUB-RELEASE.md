@@ -24,4 +24,4 @@
 Архив `portable-with-models` на GitHub не выкладывается.
 
 Нужны Windows 10/11 x64.
-Автор: Gelezyaka.
+Автор: TAP3AH.

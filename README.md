@@ -1,8 +1,8 @@
 # Оффлайн Переводчик / Offline Translator
 
-Оффлайн-переводчик для Windows. Работает без интернета после установки языковых моделей. Версия **beta 0.99**. Автор: **Gelezyaka**.
+Оффлайн-переводчик для Windows. Работает без интернета после установки языковых моделей. Версия **beta 0.99**. Автор: **TAP3AH**.
 
-Offline translator for Windows. Works without internet after language models are installed. Version **beta 0.99**. Author: **Gelezyaka**.
+Offline translator for Windows. Works without internet after language models are installed. Version **beta 0.99**. Author: **TAP3AH**.
 
 ## Возможности
 
@@ -37,4 +37,4 @@ Offline translator for Windows. Works without internet after language models are
 - NLLB-200 Distilled 600M — модель Meta, конвертация CTranslate2
 - MarianMT — модели Helsinki-NLP OPUS-MT, конвертация CTranslate2
 
-Сама программа: MIT, см. `LICENSE`. Автор — Gelezyaka.
+Сама программа: MIT, см. `LICENSE`. Автор — TAP3AH.
